@@ -1,7 +1,15 @@
 #!/bin/bash
 
+# Colors for output
+red() { echo -e "\033[31m$1\033[0m"; }
+green() { echo -e "\033[32m$1\033[0m"; }
+blue() { echo -e "\033[34m$1\033[0m"; }
+cyan() { echo -e "\033[36m$1\033[0m"; }
+
 # Function to check for existing SSH key or create one if it doesn't exist
 check_ssh_key() {
+    blue "Checking for existing SSH key..."
+
     ssh_key_path="/root/.ssh/id_rsa"
     if [ ! -f "$ssh_key_path" ]; then
         echo "SSH key not found, generating new SSH key..."
@@ -20,27 +28,35 @@ get_next_id() {
             return
         fi
     done
-    echo "No available ID found in the range 900-999." >&2
+    red "No available ID found in the range 900-999."
     exit 1
 }
 
 # Function to prompt for user input (disk, memory, swap, cores)
 prompt_user_input() {
-    read -p "Enter the GitLab repo URL: " gitlab_repo_url
-    read -p "Enter disk size (in GB, e.g. 10) [default: 10]: " disk_size
+    blue "Initializing LXC container creation..."
+    cyan "Please enter the following details to create the LXC container:"
+
+    green "Enter the GitLab repo URL: "
+    read gitlab_repo_url
+    green "Enter disk size (in GB, e.g. 10) [default: 10]: "
+    read -p "" disk_size
     disk_size=${disk_size:-10}
-    read -p "Enter memory size (in MB, e.g. 2048) [default: 2048MB]: " memory_size
+    green "Enter memory size (in MB, e.g. 2048) [default: 2048MB]: "
+    read -p "" memory_size
     memory_size=${memory_size:-2048}
-    read -p "Enter swap size (in MB, e.g. 512) [default: 512MB]: " swap_size
+    green "Enter swap size (in MB, e.g. 512) [default: 512MB]: "
+    read -p "" swap_size
     swap_size=${swap_size:-512}
-    read -p "Enter number of cores (e.g. 2) [default: 2 cores]: " cores
+    green "Enter number of cores (e.g. 2) [default: 2 cores]: "
+    read -p "" cores
     cores=${cores:-2}
 }
 
 # Function to create LXC container with specified parameters
 create_lxc_container() {
     container_id=$(get_next_id) # Get next available container ID
-    echo "Creating LXC container with ID $container_id..."
+    blue "Creating LXC container with ID $container_id..."
 
     pct create "$container_id" \
         /var/lib/vz/template/cache/debian-12-standard_12.7-1_amd64.tar.zst \
@@ -55,17 +71,18 @@ create_lxc_container() {
         -onboot 1
 
     if [ $? -ne 0 ]; then
-        echo "Error creating the LXC container."
+        red "Error creating the LXC container."
         exit 1
     fi
 
+    blue "Starting LXC container $container_id..."
     pct start "$container_id"
-    echo "LXC container $container_id created and started."
+    blue "LXC container $container_id created and started."
 }
 
 # Function to install necessary packages (curl, Docker..) inside the LXC container
 install_packages() {
-    echo "Installing packages inside container $container_id..."
+    blue "Installing packages inside container $container_id..."
 
     pct exec "$container_id" -- bash -c "
         apt-get update &&
@@ -73,17 +90,17 @@ install_packages() {
     "
 
     if [ $? -ne 0 ]; then
-        echo "Error installing packages for container $container_id."
+        red "Error installing packages for container $container_id."
         exit 1
     fi
 
-    echo "Packages installed inside container $container_id."
+    blue "Packages installed inside container $container_id."
 }
 
 
 # Function to install GitLab Runner inside the LXC container
 install_gitlab_runner() {
-    echo "Installing GitLab Runner inside container $container_id..."
+    blue "Installing GitLab Runner inside container $container_id..."
 
     pct exec "$container_id" -- bash -c "
         curl -LJO https://s3.dualstack.us-east-1.amazonaws.com/gitlab-runner-downloads/latest/deb/gitlab-runner_amd64.deb &&
@@ -93,29 +110,30 @@ install_gitlab_runner() {
     "
 
     if [ $? -ne 0 ]; then
-        echo "Error installing GitLab Runner for container $container_id."
+        red "Error installing GitLab Runner for container $container_id."
         exit 1
     fi
 
-    echo "GitLab Runner installed & started inside container $container_id."
+    blue "GitLab Runner installed & started inside container $container_id."
 }
 
 # Function to register GitLab Runner inside the container using authentication token
 register_gitlab_runner() {
-    echo "Registering GitLab Runner for container $container_id..."
+    blue "Registering GitLab Runner for container $container_id..."
 
-    echo "Instructions to create a GitLab Runner authentication token:"
-    echo "1. Navigate to your GitLab project."
-    echo "2. Go to 'Settings' > 'CI/CD'."
-    echo "3. Expand the 'Runners' section."
-    echo "4. Click 'New project runner' and setup a runner with the following settings:"
-    echo "  Tags: self-hosted"
-    echo "  Runner Description: 'Runner for $(basename "$gitlab_repo_url")'"
-    echo "  Protected: True"
-    echo "  Lock to current projects: True"
-    echo "5. Copy the 'Runer Authentication Token' (starts with glrt-). You will use this token in the next step."
+    cyan "Instructions to create a GitLab Runner authentication token:"
+    cyan "1. Navigate to your GitLab project."
+    cyan "2. Go to 'Settings' > 'CI/CD'."
+    cyan "3. Expand the 'Runners' section."
+    cyan "4. Click 'New project runner' and setup a runner with the following settings:"
+    cyan "  Tags: self-hosted"
+    cyan "  Runner Description: 'Runner for $(basename "$gitlab_repo_url")'"
+    cyan "  Protected: True"
+    cyan "  Lock to current projects: True"
+    cyan "5. Copy the 'Runer Authentication Token' (starts with glrt-). You will use this token in the next step."
 
-    read -p "Enter your GitLab project authentication token for $(basename "$gitlab_repo_url"): " gitlab_runner_token
+    green "Enter your GitLab project authentication token for $(basename "$gitlab_repo_url"): "
+    read gitlab_runner_token
 
     pct exec "$container_id" -- bash -c "
         gitlab-runner register \
@@ -128,22 +146,23 @@ register_gitlab_runner() {
         --docker-privileged
     "
     if [ $? -ne 0 ]; then
-        echo "Error registering GitLab Runner for container $container_id."
+        red "Error registering GitLab Runner for container $container_id."
         exit 1
     fi
 
-    echo "GitLab Runner registered inside container $container_id."
+    blue "GitLab Runner registered inside container $container_id."
 }
 
 # Main script execution
 main() {
+    blue "Creating LXC container with GitLab Runner for $(basename "$gitlab_repo_url")..."
     check_ssh_key
     prompt_user_input
     create_lxc_container
     install_packages
     install_gitlab_runner
     register_gitlab_runner
-    echo "Container $container_id ith GitLab Runner for $(basename "$gitlab_repo_url") created and registered successfully!"
+    blue "Container $container_id with GitLab Runner for $(basename "$gitlab_repo_url") created and registered successfully!"
 }
 
 # Run the main script
