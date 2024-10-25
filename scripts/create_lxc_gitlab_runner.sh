@@ -81,8 +81,8 @@ install_packages() {
 }
 
 
-# Function to install Docker and GitLab Runner inside the LXC container
-install_docker_gitlab_runner() {
+# Function to install GitLab Runner inside the LXC container
+install_gitlab_runner() {
     echo "Installing GitLab Runner inside container $container_id..."
 
     pct exec "$container_id" -- bash -c "
@@ -140,7 +140,8 @@ main() {
     check_ssh_key
     prompt_user_input
     create_lxc_container
-    install_docker_gitlab_runner
+    install_packages
+    install_gitlab_runner
     register_gitlab_runner
     echo "Container $container_id ith GitLab Runner for $(basename "$gitlab_repo_url") created and registered successfully!"
 }
