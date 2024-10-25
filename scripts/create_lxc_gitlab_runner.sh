@@ -60,14 +60,16 @@ create_lxc_container() {
 
     pct create "$container_id" \
         /var/lib/vz/template/cache/debian-12-standard_12.7-1_amd64.tar.zst \
+        -description "GitLab Runner for $(basename "$gitlab_repo_url")" \
         -arch amd64 \
         -hostname $(basename "$gitlab_repo_url") \
+        -rootfs local:"$disk_size" \
         -cores "$cores" \
         -memory "$memory_size" \
         -swap "$swap_size" \
-        -rootfs local:"$disk_size" \
         -net0 name=eth0,bridge=vmbr1,firewall=1,ip=dhcp \
         -ssh-public-keys "$ssh_key_path.pub" \
+        -features nesting=1,keyctl=1 \
         -onboot 1
 
     if [ $? -ne 0 ]; then
@@ -78,6 +80,14 @@ create_lxc_container() {
     blue "Starting LXC container $container_id..."
     pct start "$container_id"
     blue "LXC container $container_id created and started."
+
+    # Print the configuration of the created container
+    blue "Configuration of LXC container $container_id:"
+    pct config "$container_id"
+
+    # Retrieve and display the DHCP-assigned IP address
+    container_ip=$(pct exec "$container_id" -- hostname -I | awk '{print $1}')
+    blue "DHCP-assigned IP address of LXC container $container_id: $container_ip"
 }
 
 # Function to install necessary packages (curl, Docker..) inside the LXC container
