@@ -86,8 +86,10 @@ create_lxc_container() {
     pct config "$container_id"
 
     # Retrieve and display the DHCP-assigned IP address
-    container_ip=$(pct exec "$container_id" -- hostname -I | awk '{print $1}')
-    blue "DHCP-assigned IP address of LXC container $container_id: $container_ip"
+    blue "DHCP-assigned IP address of LXC container:"
+    pct exec "$container_id" -- bash -c "
+        ip add
+    "
 }
 
 # Function to install necessary packages (curl, Docker..) inside the LXC container
