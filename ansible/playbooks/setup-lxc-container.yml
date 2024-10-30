@@ -1,0 +1,7 @@
+# ansible/playbooks/setup-lxc-container.yml
+---
+- name: Set up LXC container with Docker and configurations
+  hosts: all
+  become: yes
+  roles:
+    - lxc-container-setup

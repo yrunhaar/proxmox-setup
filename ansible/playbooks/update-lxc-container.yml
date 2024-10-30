@@ -1,0 +1,11 @@
+---
+- name: Update Docker container on LXC
+  hosts: all
+  become: yes
+  roles:
+    - lxc-container-setup
+  tasks:
+    - name: Update Docker image and restart container
+      include_role:
+        name: lxc-container-setup
+      tasks_from: update-docker.yml

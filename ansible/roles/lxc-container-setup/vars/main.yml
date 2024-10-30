@@ -1,0 +1,6 @@
+# ansible/roles/lxc-container-setup/vars/main.yml
+---
+# Default values - can be overridden by environment variables
+registry_url: "{{ lookup('env', 'CONTAINER_REGISTRY_URL') | default('docker.io') }}"
+docker_image_path: "{{ lookup('env', 'DOCKER_IMAGE_PATH') }}"
+container_registry_token: "{{ lookup('env', 'CONTAINER_REGISTRY_TOKEN') }}"

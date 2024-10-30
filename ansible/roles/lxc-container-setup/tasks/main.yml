@@ -1,0 +1,4 @@
+# ansible/roles/lxc-container-setup/tasks/main.yml
+---
+- include_tasks: install-packages.yml
+- include_tasks: configure-docker.yml

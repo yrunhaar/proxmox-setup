@@ -1,0 +1,21 @@
+---
+- name: Log in to container registry if token is provided
+  ansible.builtin.shell: |
+    echo "{{ container_registry_token }}" | docker login {{ registry_url }} --username "{{ docker_registry_username }}" --password-stdin
+  become: yes
+  when: container_registry_token is defined
+
+- name: Pull the latest Docker image
+  ansible.builtin.docker_image:
+    name: "{{ docker_image_path }}"
+    source: pull
+    force_source: yes
+  become: yes
+
+- name: Restart Docker container with updated image
+  ansible.builtin.docker_container:
+    name: "{{ docker_container_name }}"
+    image: "{{ docker_image_path }}"
+    state: started
+    restart_policy: always
+  become: yes
