@@ -1,0 +1,78 @@
+version: v1alpha1
+debug: false
+persist: true
+machine:
+  type: worker
+  token: 1mblri.gn0qsp95bdh3tg4u
+  ca:
+    crt: LS0tLS1CRUdJTiBDRVJUSUZJQ0FURS0tLS0tCk1JSUJQekNCOHFBREFnRUNBaEVBL1VIZ0Z4QTI1dXFhR08wUWZvUzFkakFGQmdNclpYQXdFREVPTUF3R0ExVUUKQ2hNRmRHRnNiM013SGhjTk1qUXhNRE14TVRRMU9EVTNXaGNOTXpReE1ESTVNVFExT0RVM1dqQVFNUTR3REFZRApWUVFLRXdWMFlXeHZjekFxTUFVR0F5dGxjQU1oQURKZjNQUGgxaGpzaFhOMjQyTzQrbXBYdHVsbVVmVTAvd0E4CndQRGhhSEZDbzJFd1h6QU9CZ05WSFE4QkFmOEVCQU1DQW9Rd0hRWURWUjBsQkJZd0ZBWUlLd1lCQlFVSEF3RUcKQ0NzR0FRVUZCd01DTUE4R0ExVWRFd0VCL3dRRk1BTUJBZjh3SFFZRFZSME9CQllFRk1zSkx5T2owZ2tERkxFTApqdmhWd1ZGMkRwRmRNQVVHQXl0bGNBTkJBRVZxSmd5bE5YR3pNZWFyUy9jVDBpWkNaZmNUT0Q1Z2tIbm1aa3RNCmN3b2wrNExjY3B1RzlYNVVna2ZFWStKSWYwR29hN1pVK0Zlb2VhcHRISndVcWdJPQotLS0tLUVORCBDRVJUSUZJQ0FURS0tLS0tCg==
+    key: ""
+  certSANs:
+    - 192.168.0.199
+    - 127.0.0.1
+  kubelet:
+    image: ghcr.io/siderolabs/kubelet:v1.30.0
+    extraMounts:
+      - destination: /var/mnt/longhorn
+        type: bind
+        source: /var/mnt/longhorn
+        options:
+          - bind
+          - rshared
+          - rw
+    defaultRuntimeSeccompProfileEnabled: true
+    disableManifestsDirectory: true
+  network:
+    hostname: talos-worker-01
+    interfaces:
+      - deviceSelector:
+          hardwareAddr: 0E:16:42:4E:68:37
+        dhcp: true
+    nameservers:
+      - 1.1.1.1
+      - 1.0.0.1
+  disks:
+    - device: /dev/sdb
+      partitions:
+        - mountpoint: /var/mnt/longhorn
+  install:
+    disk: /dev/sda
+    image: factory.talos.dev/installer/ce4c980550dd2ab1b17bbf2b08801c7eb59418eafe8f279833297925d67c7515:v1.8.2:v1.8.2
+    wipe: false
+  time:
+    disabled: false
+    servers:
+      - time.cloudflare.com
+  features:
+    rbac: true
+    stableHostname: true
+    apidCheckExtKeyUsage: true
+    diskQuotaSupport: true
+    kubePrism:
+      enabled: true
+      port: 7445
+    hostDNS:
+      enabled: true
+      forwardKubeDNSToHost: true
+cluster:
+  id: rxVWly8bgPEs0YxGoZ1Y6CTbebQ6-yahj4TIAmPDIOI=
+  secret: QrgOT7ixFhrIHWDGTPRXGkxBUXXxR1XtEj7paqvFJbM=
+  controlPlane:
+    endpoint: https://192.168.0.199:6443
+  clusterName: c0depool-talos-cluster
+  network:
+    dnsDomain: cluster.local
+    podSubnets:
+      - 10.14.0.0/16
+    serviceSubnets:
+      - 10.15.0.0/16
+  token: gi97eq.vdwpg3vmagf0jkv1
+  ca:
+    crt: LS0tLS1CRUdJTiBDRVJUSUZJQ0FURS0tLS0tCk1JSUJpakNDQVRDZ0F3SUJBZ0lSQUxhc01raEdrQ2NUL291SVRzZmJHcEl3Q2dZSUtvWkl6ajBFQXdJd0ZURVQKTUJFR0ExVUVDaE1LYTNWaVpYSnVaWFJsY3pBZUZ3MHlOREV3TXpFeE5EVTROVFphRncwek5ERXdNamt4TkRVNApOVFphTUJVeEV6QVJCZ05WQkFvVENtdDFZbVZ5Ym1WMFpYTXdXVEFUQmdjcWhrak9QUUlCQmdncWhrak9QUU1CCkJ3TkNBQVNhYlRhM2hMdDBlbm1xS0VsQ01nQzFOQnhKM25TM1lRanltR2tZNEM3SHEzalh1K2tWSUZ1bUtRMEUKUDh1UEkyQ2hPd0ZqdXBrTGJ4S2c1Rjk1ZG9TSm8yRXdYekFPQmdOVkhROEJBZjhFQkFNQ0FvUXdIUVlEVlIwbApCQll3RkFZSUt3WUJCUVVIQXdFR0NDc0dBUVVGQndNQ01BOEdBMVVkRXdFQi93UUZNQU1CQWY4d0hRWURWUjBPCkJCWUVGQmlHWHdtK3FSdnBMWDBTVWpRUXg5aUFGMjNyTUFvR0NDcUdTTTQ5QkFNQ0EwZ0FNRVVDSVFDellIYkYKSlExc1R5WWFqTm5xdjFidERGeFBGeWRvcnhJRFFIUWk3b1ZLbHdJZ0xMTlBCNUV6NHNPdEdBS1h6cGxxVzNLego5SkdmWUEyWC9Ca3hQYVRqZWRjPQotLS0tLUVORCBDRVJUSUZJQ0FURS0tLS0tCg==
+    key: ""
+  discovery:
+    enabled: true
+    registries:
+      kubernetes:
+        disabled: true
+      service: {}
