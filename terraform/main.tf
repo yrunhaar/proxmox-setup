@@ -1,5 +1,4 @@
-# terraform/main.tf
-
+# main.tf
 terraform {
   required_providers {
     proxmox = {
@@ -10,43 +9,47 @@ terraform {
 }
 
 provider "proxmox" {
-  pm_api_url          = "https://${var.pve_server_ip}:8006/api2/json"
+  pm_api_url          = "https://${var.proxmox_server_ip}:8006/api2/json"
   pm_api_token_id     = var.proxmox_token_id
   pm_api_token_secret = var.proxmox_token_secret
   pm_tls_insecure     = true
 }
 
-resource "proxmox_lxc" "containers" {
-  for_each       = var.lxc_containers
+# Importing network/base VMs (PfSense, Fedora, etc.)
+module "network_vms" {
+  source       = "./modules/network"
+  vm_id_min    = 100
+  vm_id_max    = 199
+  additional_mac_address = var.additional_mac_address
+  storage_pool = var.storage_pool
+  target_node  = var.target_node
+}
 
+# Importing service VMs (Mattermost, GitLab, etc.)
+module "service_vms" {
+  source       = "./modules/service"
+  vm_id_min    = 200
+  vm_id_max    = 299
+  storage_pool = var.storage_pool
+  target_node  = var.target_node
+}
+
+# Importing Kubernetes VMs (Talos Control and Worker Nodes)
+module "kubernetes_vms" {
+  source         = "./modules/kubernetes"
+  vm_id_min      = 300
+  vm_id_max      = 399
+  storage_pool   = var.storage_pool
   target_node    = var.target_node
-  hostname       = each.key
-  vmid           = each.value.vm_id
-  ostemplate     = local.lxc_container_templates[each.value.template].ostemplate
-  unprivileged   = true
+  control_count  = 3
+  worker_count   = 3
+}
 
-  rootfs {
-    storage = var.storage_pool
-    size    = local.lxc_container_templates[each.value.template].disk
-  }
-
-  cores    = local.lxc_container_templates[each.value.template].cores
-  memory   = local.lxc_container_templates[each.value.template].memory
-  swap     = local.lxc_container_templates[each.value.template].swap
-
-  network {
-    name   = "eth0"
-    bridge = "vmbr1"
-    ip     = "dhcp"
-  }
-
-  ssh_public_keys = file(pathexpand("~/.ssh/id_rsa.pub"))
-
-  provisioner "local-exec" {
-    command = "ANSIBLE_HOST_KEY_CHECKING=False ansible-playbook -i '${self.network.ipv4.address},' -u root ansible/playbooks/setup-lxc-container.yml"
-    environment = {
-      CONTAINER_REGISTRY_TOKEN = var.container_registry_token
-      DOCKER_IMAGE_PATH        = var.docker_image_path
-    }
-  }
+# Importing database VMs (PostgreSQL, MongoDB, etc.)
+module "database_vms" {
+  source       = "./modules/database"
+  vm_id_min    = 400
+  vm_id_max    = 499
+  storage_pool = var.storage_pool
+  target_node  = var.target_node
 }

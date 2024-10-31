@@ -1,507 +1,4 @@
 
-./README.md # Print the file path
--------------------------------
-# gitlab-proxmox
-
-InfraOps Guide for Gitlab CI/CD Setup with Hetzner + CloudFlare + Proxmox + PfSense + HaProxy
-
-```bash
-chmod -R +x gitlab-proxmox/
-``` # Print file contents as-is
--------------------------------
-
-
-./ansible/roles/lxc-container-setup/tasks/iso-install.yml # Print the file path
--------------------------------
-# iso-install.yml
----
-- name: Ensure ISO is downloaded
-  get_url:
-    url: "{{ item.iso_url }}"
-    dest: "/var/lib/vz/template/iso/{{ item.iso_url | basename }}"
-  loop: "{{ lookup('file', '../templates/container-sizes.yml') | from_yaml }}"
-  when: not ("/var/lib/vz/template/iso/{{ item.iso_url | basename }}" is file) # Print file contents as-is
--------------------------------
-
-
-./ansible/roles/lxc-container-setup/tasks/main.yml # Print the file path
--------------------------------
- # Print file contents as-is
--------------------------------
-
-
-./ansible/playbooks/setup-lxc-container.yml # Print the file path
--------------------------------
----
-- name: Set up container with Docker and configurations
-  hosts: all
-  become: true
-  vars:
-    container_registry_token: "{{ lookup('env', 'CONTAINER_REGISTRY_TOKEN') }}"
-    docker_image_path: "{{ lookup('env', 'DOCKER_IMAGE_PATH') }}"
-  roles:
-    - container-setup # Print file contents as-is
--------------------------------
-
-
-./ansible/templates/lxc-container-sizes.yml # Print the file path
--------------------------------
-# lxc-container-sizes.yml
-templates:
-  debian-11110-small:
-    iso_url: https://cdimage.debian.org/cdimage/archive/11.11.0/amd64/iso-cd/debian-11.11.0-amd64-netinst.iso
-    cores: 2
-    memory: 2048
-    disk: 16
-  debian-11110-medium:
-    iso_url: https://cdimage.debian.org/cdimage/archive/11.11.0/amd64/iso-cd/debian-11.11.0-amd64-netinst.iso
-    cores: 4
-    memory: 4096
-    disk: 32
-  debian-11110-large:
-    iso_url: https://cdimage.debian.org/cdimage/archive/11.11.0/amd64/iso-cd/debian-11.11.0-amd64-netinst.iso
-    cores: 8
-    memory: 8192
-    disk: 64
-  debian-1270-small:
-    iso_url: https://cdimage.debian.org/debian-cd/12.7.0/amd64/iso-cd/debian-12.7.0-amd64-netinst.iso
-    cores: 2
-    memory: 2048
-    disk: 16
-  debian-1270-medium:
-    iso_url: https://cdimage.debian.org/debian-cd/12.7.0/amd64/iso-cd/debian-12.7.0-amd64-netinst.iso
-    cores: 4
-    memory: 4096
-    disk: 32
-  debian-1270-large:
-    iso_url: https://cdimage.debian.org/debian-cd/12.7.0/amd64/iso-cd/debian-12.7.0-amd64-netinst.iso
-    cores: 8
-    memory: 8192
-    disk: 64 # Print file contents as-is
--------------------------------
-
-
-./scripts/terraform/setup-docker-lxc.sh # Print the file path
--------------------------------
-#!/bin/bash
-
-# Color output functions
-red() { echo -e "[31m$1[0m"; }
-green() { echo -e "[32m$1[0m"; }
-blue() { echo -e "[34m$1[0m"; }
-cyan() { echo -e "[36m$1[0m"; }
-
-# Function to get the next available 9xx ID
-get_next_id() {
-    for id in {900..999}; do
-        if ! pct status $id &>/dev/null; then
-            echo $id
-            return
-        fi
-    done
-    red "No available ID found in the range 900-999."
-    exit 1
-}
-
-# Function to select VM size
-select_vm_size() {
-    blue "Select VM size for the GitLab Runner:"
-    echo "1) Small (2 cores, 2048MB memory, 16GB disk)"
-    echo "2) Medium (4 cores, 4096MB memory, 32GB disk)"
-    echo "3) Large (8 cores, 8192MB memory, 64GB disk)"
-    read -p "Select size (default: 1): " SIZE_OPTION
-
-    case "$SIZE_OPTION" in
-        2) TEMPLATE_NAME="ubuntu-2204-medium" ;;
-        3) TEMPLATE_NAME="ubuntu-2204-large" ;;
-        *) TEMPLATE_NAME="ubuntu-2204-small" ;;
-    esac
-}
-
-# Function to register GitLab Runner on the VM using authentication token
-register_gitlab_runner_vm() {
-    blue "Registering GitLab Runner on VM $VM_ID at $VM_IP..."
-
-    cyan "Instructions to create a GitLab Runner authentication token:"
-    cyan "1. Navigate to your GitLab project."
-    cyan "2. Go to 'Settings' > 'CI/CD'."
-    cyan "3. Expand the 'Runners' section."
-    cyan "4. Click 'New project runner' and set up a runner with the following settings:"
-    cyan "   - Tags: self-hosted"
-    cyan "   - Runner Description: 'Runner for $PROJECT_NAME'"
-    cyan "   - Protected: True"
-    cyan "   - Lock to current projects: True"
-    cyan "5. Copy the 'Runner Authentication Token' (starts with glrt-). You will use this token in the next step."
-
-    read -p "Enter your GitLab project authentication token for $PROJECT_NAME: " gitlab_runner_token
-
-    ssh "$VM_USER@$VM_IP" <<EOF
-        sudo gitlab-runner register \
-        --non-interactive \
-        --url https://gitlab.com/ \
-        --token "$gitlab_runner_token" \
-        --description 'Runner for $PROJECT_NAME' \
-        --executor docker \
-        --docker-image "docker:24.0.5" \
-        --docker-privileged
-EOF
-    if [ $? -ne 0 ]; then
-        red "Error registering GitLab Runner on VM $VM_ID."
-        exit 1
-    fi
-    green "GitLab Runner registered on VM $VM_ID."
-}
-
-# Main script logic
-read -p "Enter the GitLab project URL (e.g., https://gitlab.com/<groupname>/<projectname>): " GITLAB_URL
-PROJECT_NAME=$(basename "$gitlab_repo_url")
-VM_ID=$(get_next_id)
-
-
-blue "Creating VM with ID $VM_ID for GitLab Project: $PROJECT_NAME"
-
-# Select VM size
-select_vm_size
-
-# Set up VM parameters
-read -p "Enter VM IP address: " VM_IP
-VM_USER="terraform-user"
-
-# Check if nodes variable exists in vars.tf, if not, initialize it
-if ! grep -q "variable \"nodes\"" vars.tf; then
-  echo 'variable "nodes" {' >> vars.tf
-  echo '  type = map(object({' >> vars.tf
-  echo '    vm_id    = optional(number, 0),' >> vars.tf
-  echo '    template = string' >> vars.tf
-  echo '  }))' >> vars.tf
-  echo '  default = {}' >> vars.tf
-  echo '}' >> vars.tf
-fi
-
-# Backup vars.tf before modification
-cp vars.tf vars.tf.bak
-
-# Append VM details to `nodes` map without specifying cores, memory, or disk
-sed -i '/default = {/a \
-    "'"$PROJECT_NAME"'" = { \
-      vm_id    = '"$VM_ID"', \
-      template = "'"$TEMPLATE_NAME"'" \
-    },
-' vars.tf
-
-green "VM configuration for $PROJECT_NAME added to vars.tf."
-
-# Initialize and apply Terraform
-blue "Initializing and applying the Terraform configuration to create the VM..."
-
-terraform init
-terraform apply -auto-approve
-
-# Register GitLab Runner on the new VM
-register_gitlab_runner_vm
-green "Setup for GitLab Runner VM complete. VM ID: $VM_ID, IP: $VM_IP, Project: $PROJECT_NAME" # Print file contents as-is
--------------------------------
-
-
-./scripts/terraform/setup-terraform.sh # Print the file path
--------------------------------
-#!/bin/bash
-
-# Colors for output
-red() { echo -e "[31m$1[0m"; }
-green() { echo -e "[32m$1[0m"; }
-blue() { echo -e "[34m$1[0m"; }
-cyan() { echo -e "[36m$1[0m"; }
-
-# Provide instructions for Proxmox user setup
-cyan "=================================================="
-cyan "Setting up the necessary user and API token for Terraform in Proxmox"
-cyan "Follow these steps carefully to ensure Terraform can access Proxmox via API:"
-cyan ""
-cyan "1. Create a new user in Proxmox for Terraform"
-cyan "   Go to: Datacenter > Permissions > Users > Add"
-cyan "   Set the following values:"
-cyan "     - User name: terraform-user"
-cyan "     - Realm: pam (Linux PAM standard authentication)"
-cyan "     - Expire: never"
-cyan "     - Enabled: Yes"
-cyan "   Then click 'Add' to create the user."
-cyan ""
-cyan "2. Assign permissions to 'terraform-user'"
-cyan "   Go to: Datacenter > Permissions > Add"
-cyan "   Set the following values:"
-cyan "     - Path: '/' (This grants permissions at the root level)"
-cyan "     - User: terraform-user@pam"
-cyan "     - Role: PVEVMAdmin"
-cyan "   Then click 'Add' to save."
-cyan ""
-cyan "3. Generate an API token for 'terraform-user'"
-cyan "   Go to: Datacenter > Permissions > API Tokens > Add"
-cyan "   Set the following values:"
-cyan "     - User: terraform-user@pam"
-cyan "     - Token ID: terraform-token"
-cyan "     - Privilege Separation: Uncheck"
-cyan "     - Expire: never"
-cyan "   After clicking 'Add', save the generated token. This token will only be visible once, so be sure to copy it!"
-cyan "=================================================="
-cyan ""
-
-# Prompt user for Proxmox details
-read -p "Enter Proxmox Server IP: " PROXMOX_SERVER_IP
-read -p "Enter Proxmox Token ID (default: terraform-user@pam!terraform-token): " PROXMOX_TOKEN_ID
-PROXMOX_TOKEN_ID=${PROXMOX_TOKEN_ID:-"terraform-user@pam!terraform-token"}
-read -p "Enter Proxmox Token Secret: " PROXMOX_TOKEN_SECRET
-read -p "Enter Proxmox Node (default: pve-01): " PROXMOX_NODE
-PROXMOX_NODE=${PROXMOX_NODE:-"pve-01"}
-read -p "Enter the Proxmox Storage Pool (default: local): " STORAGE_POOL
-STORAGE_POOL=${STORAGE_POOL:-"local"}
-
-# Environment variable setup
-export TF_VAR_proxmox_token_id="$PROXMOX_TOKEN_ID"
-export TF_VAR_proxmox_token_secret="$PROXMOX_TOKEN_SECRET"
-
-# Prompt for SSH Key and generate if not exists
-if [[ ! -f ~/.ssh/id_rsa ]]; then
-    blue "Generating SSH key..."
-    ssh-keygen -t rsa -b 2048 -f ~/.ssh/id_rsa -N ""
-    green "SSH key generated at ~/.ssh/id_rsa"
-else
-    green "SSH key already exists at ~/.ssh/id_rsa"
-fi
-
-# Initialize Terraform configuration
-blue "Creating Terraform configuration under ./terraform/ directory..."
-mkdir -p terraform
-cd terraform
-
-# Create vars.tf with extended lxc_containers structure
-cat > vars.tf <<EOL
-variable "pve_server_ip" {
-  description = "Server IP for PVE cluster"
-  type        = string
-  default     = "$PROXMOX_SERVER_IP"
-}
-
-variable "target_node" {
-  description = "Proxmox VE node to target"
-  type        = string
-  default     = "$PROXMOX_NODE"
-}
-
-variable "storage_pool" {
-  description = "Storage pool in Proxmox VE for container storage"
-  type        = string
-  default     = "$STORAGE_POOL"
-}
-
-variable "lxc_containers" {
-  type = map(object({
-    vm_id          = number,
-    template       = string
-  }))
-}
-EOL
-
-# Create main.tf
-cat > main.tf <<EOL
-terraform {
-  required_providers {
-    proxmox = {
-      source  = "telmate/proxmox"
-      version = "2.9.14"
-    }
-  }
-}
-
-provider "proxmox" {
-  pm_api_url          = "https://$PROXMOX_SERVER_IP:8006/api2/json"
-  pm_api_token_id     = var.proxmox_token_id
-  pm_api_token_secret = var.proxmox_token_secret
-  pm_tls_insecure     = true
-}
-
-resource "proxmox_lxc" "containers" {
-  for_each = var.lxc_containers
-
-  hostname         = each.key
-  vmid             = each.value.vm_id
-  template         = each.value.template
-  pubkey           = file(pathexpand("~/.ssh/id_rsa.pub"))
-
-  # Invoke Ansible for provisioning
-  provisioner "local-exec" {
-    command = "ANSIBLE_HOST_KEY_CHECKING=False ansible-playbook -i '${self.network.ipv4.address},' -u root ansible/playbooks/setup-lxc-container.yml"
-  }
-}
-EOL
-
-# Initialize Terraform
-blue "Initializing Terraform configuration..."
-terraform init
-green "Terraform setup is complete! Details have been saved in the ./terraform/ directory."
-green "Run 'terraform apply' to create your LXC containers based on the configuration." # Print file contents as-is
--------------------------------
-
-
-./scripts/pfsense/setup-network.sh # Print the file path
--------------------------------
-#!/bin/bash
-
-# Color functions for output
-red() { echo -e "[31m$1[0m"; }
-green() { echo -e "[32m$1[0m"; }
-blue() { echo -e "[34m$1[0m"; }
-
-# Function to prompt for input with a default value
-prompt_input() {
-    local prompt=$1
-    local default=$2
-    read -p "$(blue "$prompt [$default]:") " input
-    echo "${input:-$default}"
-}
-
-# Function to create bridge configuration for each additional IP
-create_bridge_text() {
-    local ip=$1
-    local bridge_id=$2
-    local mac_address=$3
-    local external_bridge_id=$bridge_id
-    local internal_bridge_id=$((bridge_id * 100))
-
-    # WAN bridge configuration with MAC address and public IP
-    local bridge_config="
-auto vmbr${external_bridge_id}
-iface vmbr${external_bridge_id} inet static
-    address ${ip}
-    netmask ${NETMASK}
-    bridge_ports none
-    bridge_stp off
-    bridge_fd 0
-    hwaddress ether ${mac_address}
-#WAN ${external_bridge_id}
-"
-
-    # LAN bridge configuration without an IP, as it's for internal network only
-    bridge_config+="
-auto vmbr${internal_bridge_id}
-iface vmbr${internal_bridge_id} inet manual
-    bridge_ports none
-    bridge_stp off
-    bridge_fd 0
-#LAN ${internal_bridge_id}
-"
-    echo "$bridge_config"
-}
-
-# Step 1: Collect network information
-collect_network_info() {
-    green "Collecting network configuration..."
-    MAINSERVERIP=$(prompt_input "Main server IP" "192.168.0.1")
-    GATEWAYADDRESS=$(prompt_input "Gateway address" "192.168.0.254")
-    NETMASK=$(prompt_input "Netmask" "255.255.255.0")
-    BROADCASTIP=$(prompt_input "Broadcast IP" "192.168.0.255")
-
-    echo ""
-    blue "Note: For Hetzner, ADDITIONAL_IP_ADDRESSES corresponds to the additional IPs listed under your server in the Hetzner Robot Console."
-    blue "MAC_ADDRESSES correspond to the separate MAC addresses associated with each additional IP in the console."
-    echo ""
-    
-    ADD_IP_ADDRESSES=$(prompt_input "Additional IPs (comma-separated)" "")
-    MAC_ADDRESSES=$(prompt_input "MAC addresses for additional IPs (comma-separated)" "")
-    NETWORK_INTERFACE=$(prompt_input "Network interface" "eth0")
-}
-
-# Step 2: Confirm configuration with the user
-confirm_config() {
-    green "You have entered the following configuration:"
-    echo -e "Main server IP: $MAINSERVERIP
-Gateway address: $GATEWAYADDRESS
-Netmask: $NETMASK
-Broadcast IP: $BROADCASTIP
-Additional IPs: $ADD_IP_ADDRESSES
-MAC addresses: $MAC_ADDRESSES
-Network interface: $NETWORK_INTERFACE"
-    read -p "$(blue "Is this correct? [yes/no]:") " confirmation
-    [[ $confirmation != [Yy]* ]] && { red "Exiting without changes."; exit 1; }
-}
-
-# Step 3: Generate routing rules for additional IPs
-generate_additional_routes() {
-    additional_routes=""
-    IFS=',' read -ra ADDR <<<"$ADD_IP_ADDRESSES"
-    for add_ip in "${ADDR[@]}"; do
-        additional_routes+="    up ip route add $add_ip dev ${NETWORK_INTERFACE}
-"
-    done
-}
-
-# Step 4: Generate configuration for /etc/network/interfaces
-generate_interface_content() {
-    green "Generating network interface configuration..."
-    interfaces_content="
-### Hetzner Online GmbH installimage
-
-source /etc/network/interfaces.d/*
-
-auto lo
-iface lo inet loopback
-iface lo inet6 loopback
-
-iface ${NETWORK_INTERFACE} inet manual
-    up ip route add -net ${GATEWAYADDRESS} netmask ${NETMASK} gw ${GATEWAYADDRESS} vmbr0
-    up sysctl -w net.ipv4.ip_forward=1
-    up sysctl -w net.ipv4.conf.${NETWORK_INTERFACE}.send_redirects=0
-    up sysctl -w net.ipv6.conf.all.forwarding=1
-$additional_routes
-    up ip route add 192.168.0.0/16 via ${MAINSERVERIP} dev vmbr0
-    up ip route add 172.16.0.0/12 via ${MAINSERVERIP} dev vmbr0
-    up ip route add 10.0.0.0/8 via ${MAINSERVERIP} dev vmbr0
-
-auto vmbr0
-iface vmbr0 inet static
-    address  ${MAINSERVERIP}
-    netmask  ${NETMASK}
-    gateway  ${GATEWAYADDRESS}
-    broadcast  ${BROADCASTIP}
-    bridge-ports ${NETWORK_INTERFACE}
-    bridge-stp off
-    bridge-fd 0
-    pointopoint ${GATEWAYADDRESS}
-#Main IP configuration
-"
-}
-
-# Step 5: Add additional IP bridges to configuration
-add_additional_bridges() {
-    IFS=',' read -ra ADDR <<<"$ADD_IP_ADDRESSES"
-    IFS=',' read -ra MACS <<<"$MAC_ADDRESSES"
-    
-    for i in "${!ADDR[@]}"; do
-        bridge_id=$((i + 1))
-        interfaces_content+=$(create_bridge_text "${ADDR[i]}" "$bridge_id" "${MACS[i]}")
-    done
-}
-
-# Step 6: Apply the new configuration
-apply_config() {
-    green "Saving configuration to /etc/network/interfaces..."
-    echo "$interfaces_content" > /tmp/new_interfaces
-    timestamp=$(date +%Y%m%d-%H%M%S)
-    mv /etc/network/interfaces /etc/network/interfaces.bak-$timestamp
-    mv /tmp/new_interfaces /etc/network/interfaces
-    green "Network configuration applied. Restart networking with: 'systemctl restart networking'"
-}
-
-# Execute steps
-collect_network_info
-confirm_config
-generate_additional_routes
-generate_interface_content
-add_additional_bridges
-apply_config # Print file contents as-is
--------------------------------
-
-
 ./terraform/main.tf # Print the file path
 -------------------------------
 # terraform/main.tf
@@ -615,3195 +112,6 @@ locals {
 ./terraform/templates/vm-templates.tf # Print the file path
 -------------------------------
  # Print file contents as-is
--------------------------------
-
-
-./content.txt # Print the file path
--------------------------------
-
-./README.md # Print the file path
--------------------------------
-# gitlab-proxmox
-
-InfraOps Guide for Gitlab CI/CD Setup with Hetzner + CloudFlare + Proxmox + PfSense + HaProxy
-
-```bash
-chmod -R +x gitlab-proxmox/
-``` # Print file contents as-is
--------------------------------
-
-
-./ansible/roles/lxc-container-setup/tasks/iso-install.yml # Print the file path
--------------------------------
-# iso-install.yml
----
-- name: Ensure ISO is downloaded
-  get_url:
-    url: "{{ item.iso_url }}"
-    dest: "/var/lib/vz/template/iso/{{ item.iso_url | basename }}"
-  loop: "{{ lookup('file', '../templates/container-sizes.yml') | from_yaml }}"
-  when: not ("/var/lib/vz/template/iso/{{ item.iso_url | basename }}" is file) # Print file contents as-is
--------------------------------
-
-
-./ansible/roles/lxc-container-setup/tasks/main.yml # Print the file path
--------------------------------
- # Print file contents as-is
--------------------------------
-
-
-./ansible/playbooks/setup-lxc-container.yml # Print the file path
--------------------------------
----
-- name: Set up container with Docker and configurations
-  hosts: all
-  become: true
-  vars:
-    container_registry_token: "{{ lookup('env', 'CONTAINER_REGISTRY_TOKEN') }}"
-    docker_image_path: "{{ lookup('env', 'DOCKER_IMAGE_PATH') }}"
-  roles:
-    - container-setup # Print file contents as-is
--------------------------------
-
-
-./ansible/templates/lxc-container-sizes.yml # Print the file path
--------------------------------
-# lxc-container-sizes.yml
-templates:
-  debian-11110-small:
-    iso_url: https://cdimage.debian.org/cdimage/archive/11.11.0/amd64/iso-cd/debian-11.11.0-amd64-netinst.iso
-    cores: 2
-    memory: 2048
-    disk: 16
-  debian-11110-medium:
-    iso_url: https://cdimage.debian.org/cdimage/archive/11.11.0/amd64/iso-cd/debian-11.11.0-amd64-netinst.iso
-    cores: 4
-    memory: 4096
-    disk: 32
-  debian-11110-large:
-    iso_url: https://cdimage.debian.org/cdimage/archive/11.11.0/amd64/iso-cd/debian-11.11.0-amd64-netinst.iso
-    cores: 8
-    memory: 8192
-    disk: 64
-  debian-1270-small:
-    iso_url: https://cdimage.debian.org/debian-cd/12.7.0/amd64/iso-cd/debian-12.7.0-amd64-netinst.iso
-    cores: 2
-    memory: 2048
-    disk: 16
-  debian-1270-medium:
-    iso_url: https://cdimage.debian.org/debian-cd/12.7.0/amd64/iso-cd/debian-12.7.0-amd64-netinst.iso
-    cores: 4
-    memory: 4096
-    disk: 32
-  debian-1270-large:
-    iso_url: https://cdimage.debian.org/debian-cd/12.7.0/amd64/iso-cd/debian-12.7.0-amd64-netinst.iso
-    cores: 8
-    memory: 8192
-    disk: 64 # Print file contents as-is
--------------------------------
-
-
-./scripts/terraform/setup-docker-lxc.sh # Print the file path
--------------------------------
-#!/bin/bash
-
-# Color output functions
-red() { echo -e "[31m$1[0m"; }
-green() { echo -e "[32m$1[0m"; }
-blue() { echo -e "[34m$1[0m"; }
-cyan() { echo -e "[36m$1[0m"; }
-
-# Function to get the next available 9xx ID
-get_next_id() {
-    for id in {900..999}; do
-        if ! pct status $id &>/dev/null; then
-            echo $id
-            return
-        fi
-    done
-    red "No available ID found in the range 900-999."
-    exit 1
-}
-
-# Function to select VM size
-select_vm_size() {
-    blue "Select VM size for the GitLab Runner:"
-    echo "1) Small (2 cores, 2048MB memory, 16GB disk)"
-    echo "2) Medium (4 cores, 4096MB memory, 32GB disk)"
-    echo "3) Large (8 cores, 8192MB memory, 64GB disk)"
-    read -p "Select size (default: 1): " SIZE_OPTION
-
-    case "$SIZE_OPTION" in
-        2) TEMPLATE_NAME="ubuntu-2204-medium" ;;
-        3) TEMPLATE_NAME="ubuntu-2204-large" ;;
-        *) TEMPLATE_NAME="ubuntu-2204-small" ;;
-    esac
-}
-
-# Function to register GitLab Runner on the VM using authentication token
-register_gitlab_runner_vm() {
-    blue "Registering GitLab Runner on VM $VM_ID at $VM_IP..."
-
-    cyan "Instructions to create a GitLab Runner authentication token:"
-    cyan "1. Navigate to your GitLab project."
-    cyan "2. Go to 'Settings' > 'CI/CD'."
-    cyan "3. Expand the 'Runners' section."
-    cyan "4. Click 'New project runner' and set up a runner with the following settings:"
-    cyan "   - Tags: self-hosted"
-    cyan "   - Runner Description: 'Runner for $PROJECT_NAME'"
-    cyan "   - Protected: True"
-    cyan "   - Lock to current projects: True"
-    cyan "5. Copy the 'Runner Authentication Token' (starts with glrt-). You will use this token in the next step."
-
-    read -p "Enter your GitLab project authentication token for $PROJECT_NAME: " gitlab_runner_token
-
-    ssh "$VM_USER@$VM_IP" <<EOF
-        sudo gitlab-runner register \
-        --non-interactive \
-        --url https://gitlab.com/ \
-        --token "$gitlab_runner_token" \
-        --description 'Runner for $PROJECT_NAME' \
-        --executor docker \
-        --docker-image "docker:24.0.5" \
-        --docker-privileged
-EOF
-    if [ $? -ne 0 ]; then
-        red "Error registering GitLab Runner on VM $VM_ID."
-        exit 1
-    fi
-    green "GitLab Runner registered on VM $VM_ID."
-}
-
-# Main script logic
-read -p "Enter the GitLab project URL (e.g., https://gitlab.com/<groupname>/<projectname>): " GITLAB_URL
-PROJECT_NAME=$(basename "$gitlab_repo_url")
-VM_ID=$(get_next_id)
-
-
-blue "Creating VM with ID $VM_ID for GitLab Project: $PROJECT_NAME"
-
-# Select VM size
-select_vm_size
-
-# Set up VM parameters
-read -p "Enter VM IP address: " VM_IP
-VM_USER="terraform-user"
-
-# Check if nodes variable exists in vars.tf, if not, initialize it
-if ! grep -q "variable \"nodes\"" vars.tf; then
-  echo 'variable "nodes" {' >> vars.tf
-  echo '  type = map(object({' >> vars.tf
-  echo '    vm_id    = optional(number, 0),' >> vars.tf
-  echo '    template = string' >> vars.tf
-  echo '  }))' >> vars.tf
-  echo '  default = {}' >> vars.tf
-  echo '}' >> vars.tf
-fi
-
-# Backup vars.tf before modification
-cp vars.tf vars.tf.bak
-
-# Append VM details to `nodes` map without specifying cores, memory, or disk
-sed -i '/default = {/a \
-    "'"$PROJECT_NAME"'" = { \
-      vm_id    = '"$VM_ID"', \
-      template = "'"$TEMPLATE_NAME"'" \
-    },
-' vars.tf
-
-green "VM configuration for $PROJECT_NAME added to vars.tf."
-
-# Initialize and apply Terraform
-blue "Initializing and applying the Terraform configuration to create the VM..."
-
-terraform init
-terraform apply -auto-approve
-
-# Register GitLab Runner on the new VM
-register_gitlab_runner_vm
-green "Setup for GitLab Runner VM complete. VM ID: $VM_ID, IP: $VM_IP, Project: $PROJECT_NAME" # Print file contents as-is
--------------------------------
-
-
-./scripts/terraform/setup-terraform.sh # Print the file path
--------------------------------
-#!/bin/bash
-
-# Colors for output
-red() { echo -e "[31m$1[0m"; }
-green() { echo -e "[32m$1[0m"; }
-blue() { echo -e "[34m$1[0m"; }
-cyan() { echo -e "[36m$1[0m"; }
-
-# Provide instructions for Proxmox user setup
-cyan "=================================================="
-cyan "Setting up the necessary user and API token for Terraform in Proxmox"
-cyan "Follow these steps carefully to ensure Terraform can access Proxmox via API:"
-cyan ""
-cyan "1. Create a new user in Proxmox for Terraform"
-cyan "   Go to: Datacenter > Permissions > Users > Add"
-cyan "   Set the following values:"
-cyan "     - User name: terraform-user"
-cyan "     - Realm: pam (Linux PAM standard authentication)"
-cyan "     - Expire: never"
-cyan "     - Enabled: Yes"
-cyan "   Then click 'Add' to create the user."
-cyan ""
-cyan "2. Assign permissions to 'terraform-user'"
-cyan "   Go to: Datacenter > Permissions > Add"
-cyan "   Set the following values:"
-cyan "     - Path: '/' (This grants permissions at the root level)"
-cyan "     - User: terraform-user@pam"
-cyan "     - Role: PVEVMAdmin"
-cyan "   Then click 'Add' to save."
-cyan ""
-cyan "3. Generate an API token for 'terraform-user'"
-cyan "   Go to: Datacenter > Permissions > API Tokens > Add"
-cyan "   Set the following values:"
-cyan "     - User: terraform-user@pam"
-cyan "     - Token ID: terraform-token"
-cyan "     - Privilege Separation: Uncheck"
-cyan "     - Expire: never"
-cyan "   After clicking 'Add', save the generated token. This token will only be visible once, so be sure to copy it!"
-cyan "=================================================="
-cyan ""
-
-# Prompt user for Proxmox details
-read -p "Enter Proxmox Server IP: " PROXMOX_SERVER_IP
-read -p "Enter Proxmox Token ID (default: terraform-user@pam!terraform-token): " PROXMOX_TOKEN_ID
-PROXMOX_TOKEN_ID=${PROXMOX_TOKEN_ID:-"terraform-user@pam!terraform-token"}
-read -p "Enter Proxmox Token Secret: " PROXMOX_TOKEN_SECRET
-read -p "Enter Proxmox Node (default: pve-01): " PROXMOX_NODE
-PROXMOX_NODE=${PROXMOX_NODE:-"pve-01"}
-read -p "Enter the Proxmox Storage Pool (default: local): " STORAGE_POOL
-STORAGE_POOL=${STORAGE_POOL:-"local"}
-
-# Environment variable setup
-export TF_VAR_proxmox_token_id="$PROXMOX_TOKEN_ID"
-export TF_VAR_proxmox_token_secret="$PROXMOX_TOKEN_SECRET"
-
-# Prompt for SSH Key and generate if not exists
-if [[ ! -f ~/.ssh/id_rsa ]]; then
-    blue "Generating SSH key..."
-    ssh-keygen -t rsa -b 2048 -f ~/.ssh/id_rsa -N ""
-    green "SSH key generated at ~/.ssh/id_rsa"
-else
-    green "SSH key already exists at ~/.ssh/id_rsa"
-fi
-
-# Initialize Terraform configuration
-blue "Creating Terraform configuration under ./terraform/ directory..."
-mkdir -p terraform
-cd terraform
-
-# Create vars.tf with extended lxc_containers structure
-cat > vars.tf <<EOL
-variable "pve_server_ip" {
-  description = "Server IP for PVE cluster"
-  type        = string
-  default     = "$PROXMOX_SERVER_IP"
-}
-
-variable "target_node" {
-  description = "Proxmox VE node to target"
-  type        = string
-  default     = "$PROXMOX_NODE"
-}
-
-variable "storage_pool" {
-  description = "Storage pool in Proxmox VE for container storage"
-  type        = string
-  default     = "$STORAGE_POOL"
-}
-
-variable "lxc_containers" {
-  type = map(object({
-    vm_id          = number,
-    template       = string
-  }))
-}
-EOL
-
-# Create main.tf
-cat > main.tf <<EOL
-terraform {
-  required_providers {
-    proxmox = {
-      source  = "telmate/proxmox"
-      version = "2.9.14"
-    }
-  }
-}
-
-provider "proxmox" {
-  pm_api_url          = "https://$PROXMOX_SERVER_IP:8006/api2/json"
-  pm_api_token_id     = var.proxmox_token_id
-  pm_api_token_secret = var.proxmox_token_secret
-  pm_tls_insecure     = true
-}
-
-resource "proxmox_lxc" "containers" {
-  for_each = var.lxc_containers
-
-  hostname         = each.key
-  vmid             = each.value.vm_id
-  template         = each.value.template
-  pubkey           = file(pathexpand("~/.ssh/id_rsa.pub"))
-
-  # Invoke Ansible for provisioning
-  provisioner "local-exec" {
-    command = "ANSIBLE_HOST_KEY_CHECKING=False ansible-playbook -i '${self.network.ipv4.address},' -u root ansible/playbooks/setup-lxc-container.yml"
-  }
-}
-EOL
-
-# Initialize Terraform
-blue "Initializing Terraform configuration..."
-terraform init
-green "Terraform setup is complete! Details have been saved in the ./terraform/ directory."
-green "Run 'terraform apply' to create your LXC containers based on the configuration." # Print file contents as-is
--------------------------------
-
-
-./scripts/pfsense/setup-network.sh # Print the file path
--------------------------------
-#!/bin/bash
-
-# Color functions for output
-red() { echo -e "[31m$1[0m"; }
-green() { echo -e "[32m$1[0m"; }
-blue() { echo -e "[34m$1[0m"; }
-
-# Function to prompt for input with a default value
-prompt_input() {
-    local prompt=$1
-    local default=$2
-    read -p "$(blue "$prompt [$default]:") " input
-    echo "${input:-$default}"
-}
-
-# Function to create bridge configuration for each additional IP
-create_bridge_text() {
-    local ip=$1
-    local bridge_id=$2
-    local mac_address=$3
-    local external_bridge_id=$bridge_id
-    local internal_bridge_id=$((bridge_id * 100))
-
-    # WAN bridge configuration with MAC address and public IP
-    local bridge_config="
-auto vmbr${external_bridge_id}
-iface vmbr${external_bridge_id} inet static
-    address ${ip}
-    netmask ${NETMASK}
-    bridge_ports none
-    bridge_stp off
-    bridge_fd 0
-    hwaddress ether ${mac_address}
-#WAN ${external_bridge_id}
-"
-
-    # LAN bridge configuration without an IP, as it's for internal network only
-    bridge_config+="
-auto vmbr${internal_bridge_id}
-iface vmbr${internal_bridge_id} inet manual
-    bridge_ports none
-    bridge_stp off
-    bridge_fd 0
-#LAN ${internal_bridge_id}
-"
-    echo "$bridge_config"
-}
-
-# Step 1: Collect network information
-collect_network_info() {
-    green "Collecting network configuration..."
-    MAINSERVERIP=$(prompt_input "Main server IP" "192.168.0.1")
-    GATEWAYADDRESS=$(prompt_input "Gateway address" "192.168.0.254")
-    NETMASK=$(prompt_input "Netmask" "255.255.255.0")
-    BROADCASTIP=$(prompt_input "Broadcast IP" "192.168.0.255")
-
-    echo ""
-    blue "Note: For Hetzner, ADDITIONAL_IP_ADDRESSES corresponds to the additional IPs listed under your server in the Hetzner Robot Console."
-    blue "MAC_ADDRESSES correspond to the separate MAC addresses associated with each additional IP in the console."
-    echo ""
-    
-    ADD_IP_ADDRESSES=$(prompt_input "Additional IPs (comma-separated)" "")
-    MAC_ADDRESSES=$(prompt_input "MAC addresses for additional IPs (comma-separated)" "")
-    NETWORK_INTERFACE=$(prompt_input "Network interface" "eth0")
-}
-
-# Step 2: Confirm configuration with the user
-confirm_config() {
-    green "You have entered the following configuration:"
-    echo -e "Main server IP: $MAINSERVERIP
-Gateway address: $GATEWAYADDRESS
-Netmask: $NETMASK
-Broadcast IP: $BROADCASTIP
-Additional IPs: $ADD_IP_ADDRESSES
-MAC addresses: $MAC_ADDRESSES
-Network interface: $NETWORK_INTERFACE"
-    read -p "$(blue "Is this correct? [yes/no]:") " confirmation
-    [[ $confirmation != [Yy]* ]] && { red "Exiting without changes."; exit 1; }
-}
-
-# Step 3: Generate routing rules for additional IPs
-generate_additional_routes() {
-    additional_routes=""
-    IFS=',' read -ra ADDR <<<"$ADD_IP_ADDRESSES"
-    for add_ip in "${ADDR[@]}"; do
-        additional_routes+="    up ip route add $add_ip dev ${NETWORK_INTERFACE}
-"
-    done
-}
-
-# Step 4: Generate configuration for /etc/network/interfaces
-generate_interface_content() {
-    green "Generating network interface configuration..."
-    interfaces_content="
-### Hetzner Online GmbH installimage
-
-source /etc/network/interfaces.d/*
-
-auto lo
-iface lo inet loopback
-iface lo inet6 loopback
-
-iface ${NETWORK_INTERFACE} inet manual
-    up ip route add -net ${GATEWAYADDRESS} netmask ${NETMASK} gw ${GATEWAYADDRESS} vmbr0
-    up sysctl -w net.ipv4.ip_forward=1
-    up sysctl -w net.ipv4.conf.${NETWORK_INTERFACE}.send_redirects=0
-    up sysctl -w net.ipv6.conf.all.forwarding=1
-$additional_routes
-    up ip route add 192.168.0.0/16 via ${MAINSERVERIP} dev vmbr0
-    up ip route add 172.16.0.0/12 via ${MAINSERVERIP} dev vmbr0
-    up ip route add 10.0.0.0/8 via ${MAINSERVERIP} dev vmbr0
-
-auto vmbr0
-iface vmbr0 inet static
-    address  ${MAINSERVERIP}
-    netmask  ${NETMASK}
-    gateway  ${GATEWAYADDRESS}
-    broadcast  ${BROADCASTIP}
-    bridge-ports ${NETWORK_INTERFACE}
-    bridge-stp off
-    bridge-fd 0
-    pointopoint ${GATEWAYADDRESS}
-#Main IP configuration
-"
-}
-
-# Step 5: Add additional IP bridges to configuration
-add_additional_bridges() {
-    IFS=',' read -ra ADDR <<<"$ADD_IP_ADDRESSES"
-    IFS=',' read -ra MACS <<<"$MAC_ADDRESSES"
-    
-    for i in "${!ADDR[@]}"; do
-        bridge_id=$((i + 1))
-        interfaces_content+=$(create_bridge_text "${ADDR[i]}" "$bridge_id" "${MACS[i]}")
-    done
-}
-
-# Step 6: Apply the new configuration
-apply_config() {
-    green "Saving configuration to /etc/network/interfaces..."
-    echo "$interfaces_content" > /tmp/new_interfaces
-    timestamp=$(date +%Y%m%d-%H%M%S)
-    mv /etc/network/interfaces /etc/network/interfaces.bak-$timestamp
-    mv /tmp/new_interfaces /etc/network/interfaces
-    green "Network configuration applied. Restart networking with: 'systemctl restart networking'"
-}
-
-# Execute steps
-collect_network_info
-confirm_config
-generate_additional_routes
-generate_interface_content
-add_additional_bridges
-apply_config # Print file contents as-is
--------------------------------
-
-
-./terraform/main.tf # Print the file path
--------------------------------
-# terraform/main.tf
-
-terraform {
-  required_providers {
-    proxmox = {
-      source  = "telmate/proxmox"
-      version = "2.9.14"
-    }
-  }
-}
-
-provider "proxmox" {
-  pm_api_url          = "https://${var.pve_server_ip}:8006/api2/json"
-  pm_api_token_id     = var.proxmox_token_id
-  pm_api_token_secret = var.proxmox_token_secret
-  pm_tls_insecure     = true
-}
-
-resource "proxmox_lxc" "containers" {
-  for_each       = var.lxc_containers
-
-  target_node    = var.target_node
-  hostname       = each.key
-  vmid           = each.value.vm_id
-  ostemplate     = local.lxc_container_templates[each.value.template].ostemplate
-  unprivileged   = true
-
-  rootfs {
-    storage = var.storage_pool
-    size    = local.lxc_container_templates[each.value.template].disk
-  }
-
-  cores    = local.lxc_container_templates[each.value.template].cores
-  memory   = local.lxc_container_templates[each.value.template].memory
-  swap     = local.lxc_container_templates[each.value.template].swap
-
-  network {
-    name   = "eth0"
-    bridge = "vmbr1"
-    ip     = "dhcp"
-  }
-
-  ssh_public_keys = file(pathexpand("~/.ssh/id_rsa.pub"))
-
-  provisioner "local-exec" {
-    command = "ANSIBLE_HOST_KEY_CHECKING=False ansible-playbook -i '${self.network.ipv4.address},' -u root ansible/playbooks/setup-lxc-container.yml"
-    environment = {
-      CONTAINER_REGISTRY_TOKEN = var.container_registry_token
-      DOCKER_IMAGE_PATH        = var.docker_image_path
-    }
-  }
-} # Print file contents as-is
--------------------------------
-
-
-./terraform/templates/lxc-container-templates.tf # Print the file path
--------------------------------
-# terraform/templates/lxc-container-templates.tf
-
-locals {
-  lxc_container_templates = {
-    "debian-1171-small" = {
-      ostemplate = "local:vztmpl/debian-11-standard_11.7-1_amd64.tar.zst"
-      cores      = 2
-      memory     = 2048
-      disk       = 16
-      swap       = 512
-    }
-    "debian-1171-medium" = {
-      ostemplate = "local:vztmpl/debian-11-standard_11.7-1_amd64.tar.zst"
-      cores      = 4
-      memory     = 4096
-      disk       = 32
-      swap       = 1024
-    }
-    "debian-1171-large" = {
-      ostemplate = "local:vztmpl/debian-11-standard_11.7-1_amd64.tar.zst"
-      cores      = 8
-      memory     = 8192
-      disk       = 64
-      swap       = 2048
-    }
-    "debian-1271-small" = {
-      ostemplate = "local:vztmpl/debian-12-standard_12.7-1_amd64.tar.zst"
-      cores      = 2
-      memory     = 2048
-      disk       = 16
-      swap       = 512
-    }
-    "debian-1271-medium" = {
-      ostemplate = "local:vztmpl/debian-12-standard_12.7-1_amd64.tar.zst"
-      cores      = 4
-      memory     = 4096
-      disk       = 32
-      swap       = 1024
-    }
-    "debian-1271-large" = {
-      ostemplate = "local:vztmpl/debian-12-standard_12.7-1_amd64.tar.zst"
-      cores      = 8
-      memory     = 8192
-      disk       = 64
-      swap       = 2048
-    }
-  }
-} # Print file contents as-is
--------------------------------
-
-
-./terraform/templates/vm-templates.tf # Print the file path
--------------------------------
- # Print file contents as-is
--------------------------------
-
-
-./content.txt # Print the file path
-------------------------------- # Print file contents as-is
--------------------------------
-
-
-./README.md # Print the file path
--------------------------------
-# gitlab-proxmox
-
-InfraOps Guide for Gitlab CI/CD Setup with Hetzner + CloudFlare + Proxmox + PfSense + HaProxy
-
-```bash
-chmod -R +x gitlab-proxmox/
-``` # Print file contents as-is
--------------------------------
-
-
-./ansible/roles/lxc-container-setup/tasks/iso-install.yml # Print the file path
--------------------------------
-# iso-install.yml
----
-- name: Ensure ISO is downloaded
-  get_url:
-    url: "{{ item.iso_url }}"
-    dest: "/var/lib/vz/template/iso/{{ item.iso_url | basename }}"
-  loop: "{{ lookup('file', '../templates/container-sizes.yml') | from_yaml }}"
-  when: not ("/var/lib/vz/template/iso/{{ item.iso_url | basename }}" is file) # Print file contents as-is
--------------------------------
-
-
-./ansible/roles/lxc-container-setup/tasks/main.yml # Print the file path
--------------------------------
----
-- name: Install dependencies
-  apt:
-    name: "{{ item }}"
-    update_cache: yes
-  loop:
-    - apt-transport-https
-    - ca-certificates
-    - curl
-    - software-properties-common
-
-- name: Add Docker GPG key
-  apt_key:
-    url: https://download.docker.com/linux/debian/gpg
-    state: present
-
-- name: Add Docker repository
-  apt_repository:
-    repo: "deb [arch=amd64] https://download.docker.com/linux/debian $(lsb_release -cs) stable"
-    state: present
-
-- name: Install Docker
-  apt:
-    name: docker-ce
-    state: present
-
-- name: Create Docker configuration directory
-  file:
-    path: /etc/docker
-    state: directory
-    mode: "0755"
-
-- name: Copy Docker registry credentials
-  copy:
-    content: "{{ container_registry_token }}"
-    dest: /etc/docker/.docker_credentials
-    mode: "0600"
-
-- name: Login to Docker registry
-  shell: "echo '{{ container_registry_token }}' | docker login -u username --password-stdin registry.gitlab.com"
-
-- name: Pull Docker image
-  docker_image:
-    name: "{{ docker_image_path }}"
-    source: pull
-
-- name: Deploy Docker container
-  docker_container:
-    name: app_container
-    image: "{{ docker_image_path }}"
-    state: started
-    restart_policy: always # Print file contents as-is
--------------------------------
-
-
-./ansible/playbooks/setup-lxc-container.yml # Print the file path
--------------------------------
----
-- name: Set up container with Docker and configurations
-  hosts: all
-  become: true
-  vars:
-    container_registry_token: "{{ lookup('env', 'CONTAINER_REGISTRY_TOKEN') }}"
-    docker_image_path: "{{ lookup('env', 'DOCKER_IMAGE_PATH') }}"
-  roles:
-    - container-setup # Print file contents as-is
--------------------------------
-
-
-./ansible/templates/lxc-container-sizes.yml # Print the file path
--------------------------------
-# lxc-container-sizes.yml
-templates:
-  debian-11110-small:
-    iso_url: https://cdimage.debian.org/cdimage/archive/11.11.0/amd64/iso-cd/debian-11.11.0-amd64-netinst.iso
-    cores: 2
-    memory: 2048
-    disk: 16
-  debian-11110-medium:
-    iso_url: https://cdimage.debian.org/cdimage/archive/11.11.0/amd64/iso-cd/debian-11.11.0-amd64-netinst.iso
-    cores: 4
-    memory: 4096
-    disk: 32
-  debian-11110-large:
-    iso_url: https://cdimage.debian.org/cdimage/archive/11.11.0/amd64/iso-cd/debian-11.11.0-amd64-netinst.iso
-    cores: 8
-    memory: 8192
-    disk: 64
-  debian-1270-small:
-    iso_url: https://cdimage.debian.org/debian-cd/12.7.0/amd64/iso-cd/debian-12.7.0-amd64-netinst.iso
-    cores: 2
-    memory: 2048
-    disk: 16
-  debian-1270-medium:
-    iso_url: https://cdimage.debian.org/debian-cd/12.7.0/amd64/iso-cd/debian-12.7.0-amd64-netinst.iso
-    cores: 4
-    memory: 4096
-    disk: 32
-  debian-1270-large:
-    iso_url: https://cdimage.debian.org/debian-cd/12.7.0/amd64/iso-cd/debian-12.7.0-amd64-netinst.iso
-    cores: 8
-    memory: 8192
-    disk: 64 # Print file contents as-is
--------------------------------
-
-
-./scripts/terraform/setup-docker-lxc.sh # Print the file path
--------------------------------
-#!/bin/bash
-
-# Color output functions
-red() { echo -e "[31m$1[0m"; }
-green() { echo -e "[32m$1[0m"; }
-blue() { echo -e "[34m$1[0m"; }
-cyan() { echo -e "[36m$1[0m"; }
-
-# Function to get the next available 9xx ID
-get_next_id() {
-    for id in {900..999}; do
-        if ! pct status $id &>/dev/null; then
-            echo $id
-            return
-        fi
-    done
-    red "No available ID found in the range 900-999."
-    exit 1
-}
-
-# Function to select VM size
-select_vm_size() {
-    blue "Select VM size for the GitLab Runner:"
-    cyan "1) Small (2 cores, 2048MB memory, 16GB disk)"
-    cyan "2) Medium (4 cores, 4096MB memory, 32GB disk)"
-    cyan "3) Large (8 cores, 8192MB memory, 64GB disk)"
-    read -p "Select size (default: 1): " SIZE_OPTION
-
-    case "$SIZE_OPTION" in
-        2) TEMPLATE_NAME="ubuntu-2204-medium" ;;
-        3) TEMPLATE_NAME="ubuntu-2204-large" ;;
-        *) TEMPLATE_NAME="ubuntu-2204-small" ;;
-    esac
-
-    green "Selected VM size: $TEMPLATE_NAME"
-}
-
-# Function to register GitLab Runner on the VM using authentication token
-register_gitlab_runner_vm() {
-    blue "Registering GitLab Runner on VM $VM_ID at $VM_IP..."
-
-    cyan "Instructions to create a GitLab Runner authentication token:"
-    cyan "1. Navigate to your GitLab project."
-    cyan "2. Go to 'Settings' > 'CI/CD'."
-    cyan "3. Expand the 'Runners' section."
-    cyan "4. Click 'New project runner' and set up a runner with the following settings:"
-    cyan "   - Tags: self-hosted"
-    cyan "   - Runner Description: 'Runner for $PROJECT_NAME'"
-    cyan "   - Protected: True"
-    cyan "   - Lock to current projects: True"
-    cyan "5. Copy the 'Runner Authentication Token' (starts with glrt-). You will use this token in the next step."
-
-    read -p "Enter your GitLab project authentication token for $PROJECT_NAME: " gitlab_runner_token
-
-    ssh "$VM_USER@$VM_IP" <<EOF
-        sudo gitlab-runner register \
-        --non-interactive \
-        --url https://gitlab.com/ \
-        --token "$gitlab_runner_token" \
-        --description 'Runner for $PROJECT_NAME' \
-        --executor docker \
-        --docker-image "docker:24.0.5" \
-        --docker-privileged
-EOF
-    if [ $? -ne 0 ]; then
-        red "Error registering GitLab Runner on VM $VM_ID."
-        exit 1
-    fi
-    green "GitLab Runner registered on VM $VM_ID."
-}
-
-# Main script logic
-read -p "Enter the GitLab project URL (e.g., https://gitlab.com/<groupname>/<projectname>): " GITLAB_URL
-PROJECT_NAME=$(basename "$gitlab_repo_url")
-VM_ID=$(get_next_id)
-
-
-blue "Creating VM with ID $VM_ID for GitLab Project: $PROJECT_NAME"
-
-# Select VM size
-select_vm_size
-
-# Set up VM parameters
-read -p "Enter VM IP address: " VM_IP
-VM_USER="terraform-user"
-
-# Check if nodes variable exists in vars.tf, if not, initialize it
-if ! grep -q "variable \"nodes\"" vars.tf; then
-  echo 'variable "nodes" {' >> vars.tf
-  echo '  type = map(object({' >> vars.tf
-  echo '    vm_id    = optional(number, 0),' >> vars.tf
-  echo '    template = string' >> vars.tf
-  echo '  }))' >> vars.tf
-  echo '  default = {}' >> vars.tf
-  echo '}' >> vars.tf
-fi
-
-# Backup vars.tf before modification
-cp vars.tf vars.tf.bak
-
-# Append VM details to `nodes` map without specifying cores, memory, or disk
-sed -i '/default = {/a \
-    "'"$PROJECT_NAME"'" = { \
-      vm_id    = '"$VM_ID"', \
-      template = "'"$TEMPLATE_NAME"'" \
-    },
-' vars.tf
-
-green "VM configuration for $PROJECT_NAME added to vars.tf."
-
-# Initialize and apply Terraform
-blue "Initializing and applying the Terraform configuration to create the VM..."
-
-terraform init
-terraform apply -auto-approve
-
-# Register GitLab Runner on the new VM
-register_gitlab_runner_vm
-green "Setup for GitLab Runner VM complete. VM ID: $VM_ID, IP: $VM_IP, Project: $PROJECT_NAME" # Print file contents as-is
--------------------------------
-
-
-./scripts/terraform/setup-terraform.sh # Print the file path
--------------------------------
-#!/bin/bash
-
-# Color output functions
-red() { echo -e "[31m$1[0m"; }
-green() { echo -e "[32m$1[0m"; }
-blue() { echo -e "[34m$1[0m"; }
-cyan() { echo -e "[36m$1[0m"; }
-
-# Function to provide Proxmox user setup instructions
-setup_proxmox_user_instructions() {
-  cyan "=================================================="
-  cyan "Setting up the necessary user and API token for Terraform in Proxmox"
-  cyan "Follow these steps carefully to ensure Terraform can access Proxmox via API:"
-  cyan ""
-  cyan "1. Create a new user in Proxmox for Terraform"
-  cyan "   Go to: Datacenter > Permissions > Users > Add"
-  cyan "   Set the following values:"
-  cyan "     - User name: terraform-user"
-  cyan "     - Realm: pam (Linux PAM standard authentication)"
-  cyan "     - Expire: never"
-  cyan "     - Enabled: Yes"
-  cyan "   Then click 'Add' to create the user."
-  cyan ""
-  cyan "2. Assign permissions to 'terraform-user'"
-  cyan "   Go to: Datacenter > Permissions > Add"
-  cyan "   Set the following values:"
-  cyan "     - Path: '/' (This grants permissions at the root level)"
-  cyan "     - User: terraform-user@pam"
-  cyan "     - Role: PVEVMAdmin"
-  cyan "   Then click 'Add' to save."
-  cyan ""
-  cyan "3. Generate an API token for 'terraform-user'"
-  cyan "   Go to: Datacenter > Permissions > API Tokens > Add"
-  cyan "   Set the following values:"
-  cyan "     - User: terraform-user@pam"
-  cyan "     - Token ID: terraform-token"
-  cyan "     - Privilege Separation: Uncheck"
-  cyan "     - Expire: never"
-  cyan "   After clicking 'Add', save the generated token. This token will only be visible once, so be sure to copy it!"
-  cyan "=================================================="
-  cyan ""
-}
-
-# Function to prompt for Proxmox details
-prompt_proxmox_details() {
-  read -p "Enter Proxmox Server IP: " PROXMOX_SERVER_IP
-  read -p "Enter Proxmox Token ID (default: terraform-user@pam!terraform-token): " PROXMOX_TOKEN_ID
-  PROXMOX_TOKEN_ID=${PROXMOX_TOKEN_ID:-"terraform-user@pam!terraform-token"}
-  read -p "Enter Proxmox Token Secret: " PROXMOX_TOKEN_SECRET
-  read -p "Enter Proxmox Node (default: pve-01): " PROXMOX_NODE
-  PROXMOX_NODE=${PROXMOX_NODE:-"pve-01"}
-  read -p "Enter the Proxmox Storage Pool (default: local): " STORAGE_POOL
-  STORAGE_POOL=${STORAGE_POOL:-"local"}
-
-  export TF_VAR_proxmox_token_id="$PROXMOX_TOKEN_ID"
-  export TF_VAR_proxmox_token_secret="$PROXMOX_TOKEN_SECRET"
-}
-
-# Function to check or generate SSH key
-generate_ssh_key() {
-  if [[ ! -f ~/.ssh/id_rsa ]]; then
-    blue "Generating SSH key..."
-    ssh-keygen -t rsa -b 2048 -f ~/.ssh/id_rsa -N ""
-    green "SSH key generated at ~/.ssh/id_rsa"
-  else
-    green "SSH key already exists at ~/.ssh/id_rsa"
-  fi
-}
-
-# Function to create Terraform configuration directory and vars.tf
-create_terraform_configuration() {
-  blue "Creating Terraform configuration under ./terraform/ directory..."
-  mkdir -p terraform
-  cd terraform
-
-  cat > vars.tf <<EOL
-variable "pve_server_ip" {
-  description = "Server IP for PVE cluster"
-  type        = string
-  default     = "$PROXMOX_SERVER_IP"
-}
-
-variable "target_node" {
-  description = "Proxmox VE node to target"
-  type        = string
-  default     = "$PROXMOX_NODE"
-}
-
-variable "storage_pool" {
-  description = "Storage pool in Proxmox VE for container storage"
-  type        = string
-  default     = "$STORAGE_POOL"
-}
-
-variable "lxc_containers" {
-  type = map(object({
-    vm_id    = number,
-    template = string
-  }))
-}
-EOL
-}
-
-# Function to initialize Terraform
-initialize_terraform() {
-  blue "Initializing Terraform configuration..."
-  terraform init
-  green "Terraform setup is complete! Details have been saved in the ./terraform/ directory."
-  green "Run 'terraform apply' to create your LXC containers based on the configuration."
-}
-
-# Main script execution
-setup_proxmox_user_instructions
-prompt_proxmox_details
-generate_ssh_key
-create_terraform_configuration
-initialize_terraform # Print file contents as-is
--------------------------------
-
-
-./scripts/pfsense/setup-network.sh # Print the file path
--------------------------------
-#!/bin/bash
-
-# Color functions for output
-red() { echo -e "[31m$1[0m"; }
-green() { echo -e "[32m$1[0m"; }
-blue() { echo -e "[34m$1[0m"; }
-
-# Function to prompt for input with a default value
-prompt_input() {
-    local prompt=$1
-    local default=$2
-    read -p "$(blue "$prompt [$default]:") " input
-    echo "${input:-$default}"
-}
-
-# Function to create bridge configuration for each additional IP
-create_bridge_text() {
-    local ip=$1
-    local bridge_id=$2
-    local mac_address=$3
-    local external_bridge_id=$bridge_id
-    local internal_bridge_id=$((bridge_id * 100))
-
-    # WAN bridge configuration with MAC address and public IP
-    local bridge_config="
-auto vmbr${external_bridge_id}
-iface vmbr${external_bridge_id} inet static
-    address ${ip}
-    netmask ${NETMASK}
-    bridge_ports none
-    bridge_stp off
-    bridge_fd 0
-    hwaddress ether ${mac_address}
-#WAN ${external_bridge_id}
-"
-
-    # LAN bridge configuration without an IP, as it's for internal network only
-    bridge_config+="
-auto vmbr${internal_bridge_id}
-iface vmbr${internal_bridge_id} inet manual
-    bridge_ports none
-    bridge_stp off
-    bridge_fd 0
-#LAN ${internal_bridge_id}
-"
-    echo "$bridge_config"
-}
-
-# Step 1: Collect network information
-collect_network_info() {
-    green "Collecting network configuration..."
-    MAINSERVERIP=$(prompt_input "Main server IP" "192.168.0.1")
-    GATEWAYADDRESS=$(prompt_input "Gateway address" "192.168.0.254")
-    NETMASK=$(prompt_input "Netmask" "255.255.255.0")
-    BROADCASTIP=$(prompt_input "Broadcast IP" "192.168.0.255")
-
-    echo ""
-    blue "Note: For Hetzner, ADDITIONAL_IP_ADDRESSES corresponds to the additional IPs listed under your server in the Hetzner Robot Console."
-    blue "MAC_ADDRESSES correspond to the separate MAC addresses associated with each additional IP in the console."
-    echo ""
-    
-    ADD_IP_ADDRESSES=$(prompt_input "Additional IPs (comma-separated)" "")
-    MAC_ADDRESSES=$(prompt_input "MAC addresses for additional IPs (comma-separated)" "")
-    NETWORK_INTERFACE=$(prompt_input "Network interface" "eth0")
-}
-
-# Step 2: Confirm configuration with the user
-confirm_config() {
-    green "You have entered the following configuration:"
-    echo -e "Main server IP: $MAINSERVERIP
-Gateway address: $GATEWAYADDRESS
-Netmask: $NETMASK
-Broadcast IP: $BROADCASTIP
-Additional IPs: $ADD_IP_ADDRESSES
-MAC addresses: $MAC_ADDRESSES
-Network interface: $NETWORK_INTERFACE"
-    read -p "$(blue "Is this correct? [yes/no]:") " confirmation
-    [[ $confirmation != [Yy]* ]] && { red "Exiting without changes."; exit 1; }
-}
-
-# Step 3: Generate routing rules for additional IPs
-generate_additional_routes() {
-    additional_routes=""
-    IFS=',' read -ra ADDR <<<"$ADD_IP_ADDRESSES"
-    for add_ip in "${ADDR[@]}"; do
-        additional_routes+="    up ip route add $add_ip dev ${NETWORK_INTERFACE}
-"
-    done
-}
-
-# Step 4: Generate configuration for /etc/network/interfaces
-generate_interface_content() {
-    green "Generating network interface configuration..."
-    interfaces_content="
-### Hetzner Online GmbH installimage
-
-source /etc/network/interfaces.d/*
-
-auto lo
-iface lo inet loopback
-iface lo inet6 loopback
-
-iface ${NETWORK_INTERFACE} inet manual
-    up ip route add -net ${GATEWAYADDRESS} netmask ${NETMASK} gw ${GATEWAYADDRESS} vmbr0
-    up sysctl -w net.ipv4.ip_forward=1
-    up sysctl -w net.ipv4.conf.${NETWORK_INTERFACE}.send_redirects=0
-    up sysctl -w net.ipv6.conf.all.forwarding=1
-$additional_routes
-    up ip route add 192.168.0.0/16 via ${MAINSERVERIP} dev vmbr0
-    up ip route add 172.16.0.0/12 via ${MAINSERVERIP} dev vmbr0
-    up ip route add 10.0.0.0/8 via ${MAINSERVERIP} dev vmbr0
-
-auto vmbr0
-iface vmbr0 inet static
-    address  ${MAINSERVERIP}
-    netmask  ${NETMASK}
-    gateway  ${GATEWAYADDRESS}
-    broadcast  ${BROADCASTIP}
-    bridge-ports ${NETWORK_INTERFACE}
-    bridge-stp off
-    bridge-fd 0
-    pointopoint ${GATEWAYADDRESS}
-#Main IP configuration
-"
-}
-
-# Step 5: Add additional IP bridges to configuration
-add_additional_bridges() {
-    IFS=',' read -ra ADDR <<<"$ADD_IP_ADDRESSES"
-    IFS=',' read -ra MACS <<<"$MAC_ADDRESSES"
-    
-    for i in "${!ADDR[@]}"; do
-        bridge_id=$((i + 1))
-        interfaces_content+=$(create_bridge_text "${ADDR[i]}" "$bridge_id" "${MACS[i]}")
-    done
-}
-
-# Step 6: Apply the new configuration
-apply_config() {
-    green "Saving configuration to /etc/network/interfaces..."
-    echo "$interfaces_content" > /tmp/new_interfaces
-    timestamp=$(date +%Y%m%d-%H%M%S)
-    mv /etc/network/interfaces /etc/network/interfaces.bak-$timestamp
-    mv /tmp/new_interfaces /etc/network/interfaces
-    green "Network configuration applied. Restart networking with: 'systemctl restart networking'"
-}
-
-# Execute steps
-collect_network_info
-confirm_config
-generate_additional_routes
-generate_interface_content
-add_additional_bridges
-apply_config # Print file contents as-is
--------------------------------
-
-
-./terraform/main.tf # Print the file path
--------------------------------
-# terraform/main.tf
-
-terraform {
-  required_providers {
-    proxmox = {
-      source  = "telmate/proxmox"
-      version = "2.9.14"
-    }
-  }
-}
-
-provider "proxmox" {
-  pm_api_url          = "https://${var.pve_server_ip}:8006/api2/json"
-  pm_api_token_id     = var.proxmox_token_id
-  pm_api_token_secret = var.proxmox_token_secret
-  pm_tls_insecure     = true
-}
-
-resource "proxmox_lxc" "containers" {
-  for_each       = var.lxc_containers
-
-  target_node    = var.target_node
-  hostname       = each.key
-  vmid           = each.value.vm_id
-  ostemplate     = local.lxc_container_templates[each.value.template].ostemplate
-  unprivileged   = true
-
-  rootfs {
-    storage = var.storage_pool
-    size    = local.lxc_container_templates[each.value.template].disk
-  }
-
-  cores    = local.lxc_container_templates[each.value.template].cores
-  memory   = local.lxc_container_templates[each.value.template].memory
-  swap     = local.lxc_container_templates[each.value.template].swap
-
-  network {
-    name   = "eth0"
-    bridge = "vmbr1"
-    ip     = "dhcp"
-  }
-
-  ssh_public_keys = file(pathexpand("~/.ssh/id_rsa.pub"))
-
-  provisioner "local-exec" {
-    command = "ANSIBLE_HOST_KEY_CHECKING=False ansible-playbook -i '${self.network.ipv4.address},' -u root ansible/playbooks/setup-lxc-container.yml"
-    environment = {
-      CONTAINER_REGISTRY_TOKEN = var.container_registry_token
-      DOCKER_IMAGE_PATH        = var.docker_image_path
-    }
-  }
-} # Print file contents as-is
--------------------------------
-
-
-./terraform/templates/lxc-container-templates.tf # Print the file path
--------------------------------
-# terraform/templates/lxc-container-templates.tf
-
-locals {
-  lxc_container_templates = {
-    "debian-1171-small" = {
-      ostemplate = "local:vztmpl/debian-11-standard_11.7-1_amd64.tar.zst"
-      cores      = 2
-      memory     = 2048
-      disk       = 16
-      swap       = 512
-    }
-    "debian-1171-medium" = {
-      ostemplate = "local:vztmpl/debian-11-standard_11.7-1_amd64.tar.zst"
-      cores      = 4
-      memory     = 4096
-      disk       = 32
-      swap       = 1024
-    }
-    "debian-1171-large" = {
-      ostemplate = "local:vztmpl/debian-11-standard_11.7-1_amd64.tar.zst"
-      cores      = 8
-      memory     = 8192
-      disk       = 64
-      swap       = 2048
-    }
-    "debian-1271-small" = {
-      ostemplate = "local:vztmpl/debian-12-standard_12.7-1_amd64.tar.zst"
-      cores      = 2
-      memory     = 2048
-      disk       = 16
-      swap       = 512
-    }
-    "debian-1271-medium" = {
-      ostemplate = "local:vztmpl/debian-12-standard_12.7-1_amd64.tar.zst"
-      cores      = 4
-      memory     = 4096
-      disk       = 32
-      swap       = 1024
-    }
-    "debian-1271-large" = {
-      ostemplate = "local:vztmpl/debian-12-standard_12.7-1_amd64.tar.zst"
-      cores      = 8
-      memory     = 8192
-      disk       = 64
-      swap       = 2048
-    }
-  }
-} # Print file contents as-is
--------------------------------
-
-
-./terraform/templates/vm-templates.tf # Print the file path
--------------------------------
- # Print file contents as-is
--------------------------------
-
-
-./content.txt # Print the file path
--------------------------------
-
-./README.md # Print the file path
--------------------------------
-# gitlab-proxmox
-
-InfraOps Guide for Gitlab CI/CD Setup with Hetzner + CloudFlare + Proxmox + PfSense + HaProxy
-
-```bash
-chmod -R +x gitlab-proxmox/
-``` # Print file contents as-is
--------------------------------
-
-
-./ansible/roles/lxc-container-setup/tasks/iso-install.yml # Print the file path
--------------------------------
-# iso-install.yml
----
-- name: Ensure ISO is downloaded
-  get_url:
-    url: "{{ item.iso_url }}"
-    dest: "/var/lib/vz/template/iso/{{ item.iso_url | basename }}"
-  loop: "{{ lookup('file', '../templates/container-sizes.yml') | from_yaml }}"
-  when: not ("/var/lib/vz/template/iso/{{ item.iso_url | basename }}" is file) # Print file contents as-is
--------------------------------
-
-
-./ansible/roles/lxc-container-setup/tasks/main.yml # Print the file path
--------------------------------
- # Print file contents as-is
--------------------------------
-
-
-./ansible/playbooks/setup-lxc-container.yml # Print the file path
--------------------------------
----
-- name: Set up container with Docker and configurations
-  hosts: all
-  become: true
-  vars:
-    container_registry_token: "{{ lookup('env', 'CONTAINER_REGISTRY_TOKEN') }}"
-    docker_image_path: "{{ lookup('env', 'DOCKER_IMAGE_PATH') }}"
-  roles:
-    - container-setup # Print file contents as-is
--------------------------------
-
-
-./ansible/templates/lxc-container-sizes.yml # Print the file path
--------------------------------
-# lxc-container-sizes.yml
-templates:
-  debian-11110-small:
-    iso_url: https://cdimage.debian.org/cdimage/archive/11.11.0/amd64/iso-cd/debian-11.11.0-amd64-netinst.iso
-    cores: 2
-    memory: 2048
-    disk: 16
-  debian-11110-medium:
-    iso_url: https://cdimage.debian.org/cdimage/archive/11.11.0/amd64/iso-cd/debian-11.11.0-amd64-netinst.iso
-    cores: 4
-    memory: 4096
-    disk: 32
-  debian-11110-large:
-    iso_url: https://cdimage.debian.org/cdimage/archive/11.11.0/amd64/iso-cd/debian-11.11.0-amd64-netinst.iso
-    cores: 8
-    memory: 8192
-    disk: 64
-  debian-1270-small:
-    iso_url: https://cdimage.debian.org/debian-cd/12.7.0/amd64/iso-cd/debian-12.7.0-amd64-netinst.iso
-    cores: 2
-    memory: 2048
-    disk: 16
-  debian-1270-medium:
-    iso_url: https://cdimage.debian.org/debian-cd/12.7.0/amd64/iso-cd/debian-12.7.0-amd64-netinst.iso
-    cores: 4
-    memory: 4096
-    disk: 32
-  debian-1270-large:
-    iso_url: https://cdimage.debian.org/debian-cd/12.7.0/amd64/iso-cd/debian-12.7.0-amd64-netinst.iso
-    cores: 8
-    memory: 8192
-    disk: 64 # Print file contents as-is
--------------------------------
-
-
-./scripts/terraform/setup-docker-lxc.sh # Print the file path
--------------------------------
-#!/bin/bash
-
-# Color output functions
-red() { echo -e "[31m$1[0m"; }
-green() { echo -e "[32m$1[0m"; }
-blue() { echo -e "[34m$1[0m"; }
-cyan() { echo -e "[36m$1[0m"; }
-
-# Function to get the next available 9xx ID
-get_next_id() {
-    for id in {900..999}; do
-        if ! pct status $id &>/dev/null; then
-            echo $id
-            return
-        fi
-    done
-    red "No available ID found in the range 900-999."
-    exit 1
-}
-
-# Function to select VM size
-select_vm_size() {
-    blue "Select VM size for the GitLab Runner:"
-    echo "1) Small (2 cores, 2048MB memory, 16GB disk)"
-    echo "2) Medium (4 cores, 4096MB memory, 32GB disk)"
-    echo "3) Large (8 cores, 8192MB memory, 64GB disk)"
-    read -p "Select size (default: 1): " SIZE_OPTION
-
-    case "$SIZE_OPTION" in
-        2) TEMPLATE_NAME="ubuntu-2204-medium" ;;
-        3) TEMPLATE_NAME="ubuntu-2204-large" ;;
-        *) TEMPLATE_NAME="ubuntu-2204-small" ;;
-    esac
-}
-
-# Function to register GitLab Runner on the VM using authentication token
-register_gitlab_runner_vm() {
-    blue "Registering GitLab Runner on VM $VM_ID at $VM_IP..."
-
-    cyan "Instructions to create a GitLab Runner authentication token:"
-    cyan "1. Navigate to your GitLab project."
-    cyan "2. Go to 'Settings' > 'CI/CD'."
-    cyan "3. Expand the 'Runners' section."
-    cyan "4. Click 'New project runner' and set up a runner with the following settings:"
-    cyan "   - Tags: self-hosted"
-    cyan "   - Runner Description: 'Runner for $PROJECT_NAME'"
-    cyan "   - Protected: True"
-    cyan "   - Lock to current projects: True"
-    cyan "5. Copy the 'Runner Authentication Token' (starts with glrt-). You will use this token in the next step."
-
-    read -p "Enter your GitLab project authentication token for $PROJECT_NAME: " gitlab_runner_token
-
-    ssh "$VM_USER@$VM_IP" <<EOF
-        sudo gitlab-runner register \
-        --non-interactive \
-        --url https://gitlab.com/ \
-        --token "$gitlab_runner_token" \
-        --description 'Runner for $PROJECT_NAME' \
-        --executor docker \
-        --docker-image "docker:24.0.5" \
-        --docker-privileged
-EOF
-    if [ $? -ne 0 ]; then
-        red "Error registering GitLab Runner on VM $VM_ID."
-        exit 1
-    fi
-    green "GitLab Runner registered on VM $VM_ID."
-}
-
-# Main script logic
-read -p "Enter the GitLab project URL (e.g., https://gitlab.com/<groupname>/<projectname>): " GITLAB_URL
-PROJECT_NAME=$(basename "$gitlab_repo_url")
-VM_ID=$(get_next_id)
-
-
-blue "Creating VM with ID $VM_ID for GitLab Project: $PROJECT_NAME"
-
-# Select VM size
-select_vm_size
-
-# Set up VM parameters
-read -p "Enter VM IP address: " VM_IP
-VM_USER="terraform-user"
-
-# Check if nodes variable exists in vars.tf, if not, initialize it
-if ! grep -q "variable \"nodes\"" vars.tf; then
-  echo 'variable "nodes" {' >> vars.tf
-  echo '  type = map(object({' >> vars.tf
-  echo '    vm_id    = optional(number, 0),' >> vars.tf
-  echo '    template = string' >> vars.tf
-  echo '  }))' >> vars.tf
-  echo '  default = {}' >> vars.tf
-  echo '}' >> vars.tf
-fi
-
-# Backup vars.tf before modification
-cp vars.tf vars.tf.bak
-
-# Append VM details to `nodes` map without specifying cores, memory, or disk
-sed -i '/default = {/a \
-    "'"$PROJECT_NAME"'" = { \
-      vm_id    = '"$VM_ID"', \
-      template = "'"$TEMPLATE_NAME"'" \
-    },
-' vars.tf
-
-green "VM configuration for $PROJECT_NAME added to vars.tf."
-
-# Initialize and apply Terraform
-blue "Initializing and applying the Terraform configuration to create the VM..."
-
-terraform init
-terraform apply -auto-approve
-
-# Register GitLab Runner on the new VM
-register_gitlab_runner_vm
-green "Setup for GitLab Runner VM complete. VM ID: $VM_ID, IP: $VM_IP, Project: $PROJECT_NAME" # Print file contents as-is
--------------------------------
-
-
-./scripts/terraform/setup-terraform.sh # Print the file path
--------------------------------
-#!/bin/bash
-
-# Colors for output
-red() { echo -e "[31m$1[0m"; }
-green() { echo -e "[32m$1[0m"; }
-blue() { echo -e "[34m$1[0m"; }
-cyan() { echo -e "[36m$1[0m"; }
-
-# Provide instructions for Proxmox user setup
-cyan "=================================================="
-cyan "Setting up the necessary user and API token for Terraform in Proxmox"
-cyan "Follow these steps carefully to ensure Terraform can access Proxmox via API:"
-cyan ""
-cyan "1. Create a new user in Proxmox for Terraform"
-cyan "   Go to: Datacenter > Permissions > Users > Add"
-cyan "   Set the following values:"
-cyan "     - User name: terraform-user"
-cyan "     - Realm: pam (Linux PAM standard authentication)"
-cyan "     - Expire: never"
-cyan "     - Enabled: Yes"
-cyan "   Then click 'Add' to create the user."
-cyan ""
-cyan "2. Assign permissions to 'terraform-user'"
-cyan "   Go to: Datacenter > Permissions > Add"
-cyan "   Set the following values:"
-cyan "     - Path: '/' (This grants permissions at the root level)"
-cyan "     - User: terraform-user@pam"
-cyan "     - Role: PVEVMAdmin"
-cyan "   Then click 'Add' to save."
-cyan ""
-cyan "3. Generate an API token for 'terraform-user'"
-cyan "   Go to: Datacenter > Permissions > API Tokens > Add"
-cyan "   Set the following values:"
-cyan "     - User: terraform-user@pam"
-cyan "     - Token ID: terraform-token"
-cyan "     - Privilege Separation: Uncheck"
-cyan "     - Expire: never"
-cyan "   After clicking 'Add', save the generated token. This token will only be visible once, so be sure to copy it!"
-cyan "=================================================="
-cyan ""
-
-# Prompt user for Proxmox details
-read -p "Enter Proxmox Server IP: " PROXMOX_SERVER_IP
-read -p "Enter Proxmox Token ID (default: terraform-user@pam!terraform-token): " PROXMOX_TOKEN_ID
-PROXMOX_TOKEN_ID=${PROXMOX_TOKEN_ID:-"terraform-user@pam!terraform-token"}
-read -p "Enter Proxmox Token Secret: " PROXMOX_TOKEN_SECRET
-read -p "Enter Proxmox Node (default: pve-01): " PROXMOX_NODE
-PROXMOX_NODE=${PROXMOX_NODE:-"pve-01"}
-read -p "Enter the Proxmox Storage Pool (default: local): " STORAGE_POOL
-STORAGE_POOL=${STORAGE_POOL:-"local"}
-
-# Environment variable setup
-export TF_VAR_proxmox_token_id="$PROXMOX_TOKEN_ID"
-export TF_VAR_proxmox_token_secret="$PROXMOX_TOKEN_SECRET"
-
-# Prompt for SSH Key and generate if not exists
-if [[ ! -f ~/.ssh/id_rsa ]]; then
-    blue "Generating SSH key..."
-    ssh-keygen -t rsa -b 2048 -f ~/.ssh/id_rsa -N ""
-    green "SSH key generated at ~/.ssh/id_rsa"
-else
-    green "SSH key already exists at ~/.ssh/id_rsa"
-fi
-
-# Initialize Terraform configuration
-blue "Creating Terraform configuration under ./terraform/ directory..."
-mkdir -p terraform
-cd terraform
-
-# Create vars.tf with extended lxc_containers structure
-cat > vars.tf <<EOL
-variable "pve_server_ip" {
-  description = "Server IP for PVE cluster"
-  type        = string
-  default     = "$PROXMOX_SERVER_IP"
-}
-
-variable "target_node" {
-  description = "Proxmox VE node to target"
-  type        = string
-  default     = "$PROXMOX_NODE"
-}
-
-variable "storage_pool" {
-  description = "Storage pool in Proxmox VE for container storage"
-  type        = string
-  default     = "$STORAGE_POOL"
-}
-
-variable "lxc_containers" {
-  type = map(object({
-    vm_id          = number,
-    template       = string
-  }))
-}
-EOL
-
-# Create main.tf
-cat > main.tf <<EOL
-terraform {
-  required_providers {
-    proxmox = {
-      source  = "telmate/proxmox"
-      version = "2.9.14"
-    }
-  }
-}
-
-provider "proxmox" {
-  pm_api_url          = "https://$PROXMOX_SERVER_IP:8006/api2/json"
-  pm_api_token_id     = var.proxmox_token_id
-  pm_api_token_secret = var.proxmox_token_secret
-  pm_tls_insecure     = true
-}
-
-resource "proxmox_lxc" "containers" {
-  for_each = var.lxc_containers
-
-  hostname         = each.key
-  vmid             = each.value.vm_id
-  template         = each.value.template
-  pubkey           = file(pathexpand("~/.ssh/id_rsa.pub"))
-
-  # Invoke Ansible for provisioning
-  provisioner "local-exec" {
-    command = "ANSIBLE_HOST_KEY_CHECKING=False ansible-playbook -i '${self.network.ipv4.address},' -u root ansible/playbooks/setup-lxc-container.yml"
-  }
-}
-EOL
-
-# Initialize Terraform
-blue "Initializing Terraform configuration..."
-terraform init
-green "Terraform setup is complete! Details have been saved in the ./terraform/ directory."
-green "Run 'terraform apply' to create your LXC containers based on the configuration." # Print file contents as-is
--------------------------------
-
-
-./scripts/pfsense/setup-network.sh # Print the file path
--------------------------------
-#!/bin/bash
-
-# Color functions for output
-red() { echo -e "[31m$1[0m"; }
-green() { echo -e "[32m$1[0m"; }
-blue() { echo -e "[34m$1[0m"; }
-
-# Function to prompt for input with a default value
-prompt_input() {
-    local prompt=$1
-    local default=$2
-    read -p "$(blue "$prompt [$default]:") " input
-    echo "${input:-$default}"
-}
-
-# Function to create bridge configuration for each additional IP
-create_bridge_text() {
-    local ip=$1
-    local bridge_id=$2
-    local mac_address=$3
-    local external_bridge_id=$bridge_id
-    local internal_bridge_id=$((bridge_id * 100))
-
-    # WAN bridge configuration with MAC address and public IP
-    local bridge_config="
-auto vmbr${external_bridge_id}
-iface vmbr${external_bridge_id} inet static
-    address ${ip}
-    netmask ${NETMASK}
-    bridge_ports none
-    bridge_stp off
-    bridge_fd 0
-    hwaddress ether ${mac_address}
-#WAN ${external_bridge_id}
-"
-
-    # LAN bridge configuration without an IP, as it's for internal network only
-    bridge_config+="
-auto vmbr${internal_bridge_id}
-iface vmbr${internal_bridge_id} inet manual
-    bridge_ports none
-    bridge_stp off
-    bridge_fd 0
-#LAN ${internal_bridge_id}
-"
-    echo "$bridge_config"
-}
-
-# Step 1: Collect network information
-collect_network_info() {
-    green "Collecting network configuration..."
-    MAINSERVERIP=$(prompt_input "Main server IP" "192.168.0.1")
-    GATEWAYADDRESS=$(prompt_input "Gateway address" "192.168.0.254")
-    NETMASK=$(prompt_input "Netmask" "255.255.255.0")
-    BROADCASTIP=$(prompt_input "Broadcast IP" "192.168.0.255")
-
-    echo ""
-    blue "Note: For Hetzner, ADDITIONAL_IP_ADDRESSES corresponds to the additional IPs listed under your server in the Hetzner Robot Console."
-    blue "MAC_ADDRESSES correspond to the separate MAC addresses associated with each additional IP in the console."
-    echo ""
-    
-    ADD_IP_ADDRESSES=$(prompt_input "Additional IPs (comma-separated)" "")
-    MAC_ADDRESSES=$(prompt_input "MAC addresses for additional IPs (comma-separated)" "")
-    NETWORK_INTERFACE=$(prompt_input "Network interface" "eth0")
-}
-
-# Step 2: Confirm configuration with the user
-confirm_config() {
-    green "You have entered the following configuration:"
-    echo -e "Main server IP: $MAINSERVERIP
-Gateway address: $GATEWAYADDRESS
-Netmask: $NETMASK
-Broadcast IP: $BROADCASTIP
-Additional IPs: $ADD_IP_ADDRESSES
-MAC addresses: $MAC_ADDRESSES
-Network interface: $NETWORK_INTERFACE"
-    read -p "$(blue "Is this correct? [yes/no]:") " confirmation
-    [[ $confirmation != [Yy]* ]] && { red "Exiting without changes."; exit 1; }
-}
-
-# Step 3: Generate routing rules for additional IPs
-generate_additional_routes() {
-    additional_routes=""
-    IFS=',' read -ra ADDR <<<"$ADD_IP_ADDRESSES"
-    for add_ip in "${ADDR[@]}"; do
-        additional_routes+="    up ip route add $add_ip dev ${NETWORK_INTERFACE}
-"
-    done
-}
-
-# Step 4: Generate configuration for /etc/network/interfaces
-generate_interface_content() {
-    green "Generating network interface configuration..."
-    interfaces_content="
-### Hetzner Online GmbH installimage
-
-source /etc/network/interfaces.d/*
-
-auto lo
-iface lo inet loopback
-iface lo inet6 loopback
-
-iface ${NETWORK_INTERFACE} inet manual
-    up ip route add -net ${GATEWAYADDRESS} netmask ${NETMASK} gw ${GATEWAYADDRESS} vmbr0
-    up sysctl -w net.ipv4.ip_forward=1
-    up sysctl -w net.ipv4.conf.${NETWORK_INTERFACE}.send_redirects=0
-    up sysctl -w net.ipv6.conf.all.forwarding=1
-$additional_routes
-    up ip route add 192.168.0.0/16 via ${MAINSERVERIP} dev vmbr0
-    up ip route add 172.16.0.0/12 via ${MAINSERVERIP} dev vmbr0
-    up ip route add 10.0.0.0/8 via ${MAINSERVERIP} dev vmbr0
-
-auto vmbr0
-iface vmbr0 inet static
-    address  ${MAINSERVERIP}
-    netmask  ${NETMASK}
-    gateway  ${GATEWAYADDRESS}
-    broadcast  ${BROADCASTIP}
-    bridge-ports ${NETWORK_INTERFACE}
-    bridge-stp off
-    bridge-fd 0
-    pointopoint ${GATEWAYADDRESS}
-#Main IP configuration
-"
-}
-
-# Step 5: Add additional IP bridges to configuration
-add_additional_bridges() {
-    IFS=',' read -ra ADDR <<<"$ADD_IP_ADDRESSES"
-    IFS=',' read -ra MACS <<<"$MAC_ADDRESSES"
-    
-    for i in "${!ADDR[@]}"; do
-        bridge_id=$((i + 1))
-        interfaces_content+=$(create_bridge_text "${ADDR[i]}" "$bridge_id" "${MACS[i]}")
-    done
-}
-
-# Step 6: Apply the new configuration
-apply_config() {
-    green "Saving configuration to /etc/network/interfaces..."
-    echo "$interfaces_content" > /tmp/new_interfaces
-    timestamp=$(date +%Y%m%d-%H%M%S)
-    mv /etc/network/interfaces /etc/network/interfaces.bak-$timestamp
-    mv /tmp/new_interfaces /etc/network/interfaces
-    green "Network configuration applied. Restart networking with: 'systemctl restart networking'"
-}
-
-# Execute steps
-collect_network_info
-confirm_config
-generate_additional_routes
-generate_interface_content
-add_additional_bridges
-apply_config # Print file contents as-is
--------------------------------
-
-
-./terraform/main.tf # Print the file path
--------------------------------
-# terraform/main.tf
-
-terraform {
-  required_providers {
-    proxmox = {
-      source  = "telmate/proxmox"
-      version = "2.9.14"
-    }
-  }
-}
-
-provider "proxmox" {
-  pm_api_url          = "https://${var.pve_server_ip}:8006/api2/json"
-  pm_api_token_id     = var.proxmox_token_id
-  pm_api_token_secret = var.proxmox_token_secret
-  pm_tls_insecure     = true
-}
-
-resource "proxmox_lxc" "containers" {
-  for_each       = var.lxc_containers
-
-  target_node    = var.target_node
-  hostname       = each.key
-  vmid           = each.value.vm_id
-  ostemplate     = local.lxc_container_templates[each.value.template].ostemplate
-  unprivileged   = true
-
-  rootfs {
-    storage = var.storage_pool
-    size    = local.lxc_container_templates[each.value.template].disk
-  }
-
-  cores    = local.lxc_container_templates[each.value.template].cores
-  memory   = local.lxc_container_templates[each.value.template].memory
-  swap     = local.lxc_container_templates[each.value.template].swap
-
-  network {
-    name   = "eth0"
-    bridge = "vmbr1"
-    ip     = "dhcp"
-  }
-
-  ssh_public_keys = file(pathexpand("~/.ssh/id_rsa.pub"))
-
-  provisioner "local-exec" {
-    command = "ANSIBLE_HOST_KEY_CHECKING=False ansible-playbook -i '${self.network.ipv4.address},' -u root ansible/playbooks/setup-lxc-container.yml"
-    environment = {
-      CONTAINER_REGISTRY_TOKEN = var.container_registry_token
-      DOCKER_IMAGE_PATH        = var.docker_image_path
-    }
-  }
-} # Print file contents as-is
--------------------------------
-
-
-./terraform/templates/lxc-container-templates.tf # Print the file path
--------------------------------
-# terraform/templates/lxc-container-templates.tf
-
-locals {
-  lxc_container_templates = {
-    "debian-1171-small" = {
-      ostemplate = "local:vztmpl/debian-11-standard_11.7-1_amd64.tar.zst"
-      cores      = 2
-      memory     = 2048
-      disk       = 16
-      swap       = 512
-    }
-    "debian-1171-medium" = {
-      ostemplate = "local:vztmpl/debian-11-standard_11.7-1_amd64.tar.zst"
-      cores      = 4
-      memory     = 4096
-      disk       = 32
-      swap       = 1024
-    }
-    "debian-1171-large" = {
-      ostemplate = "local:vztmpl/debian-11-standard_11.7-1_amd64.tar.zst"
-      cores      = 8
-      memory     = 8192
-      disk       = 64
-      swap       = 2048
-    }
-    "debian-1271-small" = {
-      ostemplate = "local:vztmpl/debian-12-standard_12.7-1_amd64.tar.zst"
-      cores      = 2
-      memory     = 2048
-      disk       = 16
-      swap       = 512
-    }
-    "debian-1271-medium" = {
-      ostemplate = "local:vztmpl/debian-12-standard_12.7-1_amd64.tar.zst"
-      cores      = 4
-      memory     = 4096
-      disk       = 32
-      swap       = 1024
-    }
-    "debian-1271-large" = {
-      ostemplate = "local:vztmpl/debian-12-standard_12.7-1_amd64.tar.zst"
-      cores      = 8
-      memory     = 8192
-      disk       = 64
-      swap       = 2048
-    }
-  }
-} # Print file contents as-is
--------------------------------
-
-
-./terraform/templates/vm-templates.tf # Print the file path
--------------------------------
- # Print file contents as-is
--------------------------------
-
-
-./content.txt # Print the file path
--------------------------------
-
-./README.md # Print the file path
--------------------------------
-# gitlab-proxmox
-
-InfraOps Guide for Gitlab CI/CD Setup with Hetzner + CloudFlare + Proxmox + PfSense + HaProxy
-
-```bash
-chmod -R +x gitlab-proxmox/
-``` # Print file contents as-is
--------------------------------
-
-
-./ansible/roles/lxc-container-setup/tasks/iso-install.yml # Print the file path
--------------------------------
-# iso-install.yml
----
-- name: Ensure ISO is downloaded
-  get_url:
-    url: "{{ item.iso_url }}"
-    dest: "/var/lib/vz/template/iso/{{ item.iso_url | basename }}"
-  loop: "{{ lookup('file', '../templates/container-sizes.yml') | from_yaml }}"
-  when: not ("/var/lib/vz/template/iso/{{ item.iso_url | basename }}" is file) # Print file contents as-is
--------------------------------
-
-
-./ansible/roles/lxc-container-setup/tasks/main.yml # Print the file path
--------------------------------
- # Print file contents as-is
--------------------------------
-
-
-./ansible/playbooks/setup-lxc-container.yml # Print the file path
--------------------------------
----
-- name: Set up container with Docker and configurations
-  hosts: all
-  become: true
-  vars:
-    container_registry_token: "{{ lookup('env', 'CONTAINER_REGISTRY_TOKEN') }}"
-    docker_image_path: "{{ lookup('env', 'DOCKER_IMAGE_PATH') }}"
-  roles:
-    - container-setup # Print file contents as-is
--------------------------------
-
-
-./ansible/templates/lxc-container-sizes.yml # Print the file path
--------------------------------
-# lxc-container-sizes.yml
-templates:
-  debian-11110-small:
-    iso_url: https://cdimage.debian.org/cdimage/archive/11.11.0/amd64/iso-cd/debian-11.11.0-amd64-netinst.iso
-    cores: 2
-    memory: 2048
-    disk: 16
-  debian-11110-medium:
-    iso_url: https://cdimage.debian.org/cdimage/archive/11.11.0/amd64/iso-cd/debian-11.11.0-amd64-netinst.iso
-    cores: 4
-    memory: 4096
-    disk: 32
-  debian-11110-large:
-    iso_url: https://cdimage.debian.org/cdimage/archive/11.11.0/amd64/iso-cd/debian-11.11.0-amd64-netinst.iso
-    cores: 8
-    memory: 8192
-    disk: 64
-  debian-1270-small:
-    iso_url: https://cdimage.debian.org/debian-cd/12.7.0/amd64/iso-cd/debian-12.7.0-amd64-netinst.iso
-    cores: 2
-    memory: 2048
-    disk: 16
-  debian-1270-medium:
-    iso_url: https://cdimage.debian.org/debian-cd/12.7.0/amd64/iso-cd/debian-12.7.0-amd64-netinst.iso
-    cores: 4
-    memory: 4096
-    disk: 32
-  debian-1270-large:
-    iso_url: https://cdimage.debian.org/debian-cd/12.7.0/amd64/iso-cd/debian-12.7.0-amd64-netinst.iso
-    cores: 8
-    memory: 8192
-    disk: 64 # Print file contents as-is
--------------------------------
-
-
-./scripts/terraform/setup-docker-lxc.sh # Print the file path
--------------------------------
-#!/bin/bash
-
-# Color output functions
-red() { echo -e "[31m$1[0m"; }
-green() { echo -e "[32m$1[0m"; }
-blue() { echo -e "[34m$1[0m"; }
-cyan() { echo -e "[36m$1[0m"; }
-
-# Function to get the next available 9xx ID
-get_next_id() {
-    for id in {900..999}; do
-        if ! pct status $id &>/dev/null; then
-            echo $id
-            return
-        fi
-    done
-    red "No available ID found in the range 900-999."
-    exit 1
-}
-
-# Function to select VM size
-select_vm_size() {
-    blue "Select VM size for the GitLab Runner:"
-    echo "1) Small (2 cores, 2048MB memory, 16GB disk)"
-    echo "2) Medium (4 cores, 4096MB memory, 32GB disk)"
-    echo "3) Large (8 cores, 8192MB memory, 64GB disk)"
-    read -p "Select size (default: 1): " SIZE_OPTION
-
-    case "$SIZE_OPTION" in
-        2) TEMPLATE_NAME="ubuntu-2204-medium" ;;
-        3) TEMPLATE_NAME="ubuntu-2204-large" ;;
-        *) TEMPLATE_NAME="ubuntu-2204-small" ;;
-    esac
-}
-
-# Function to register GitLab Runner on the VM using authentication token
-register_gitlab_runner_vm() {
-    blue "Registering GitLab Runner on VM $VM_ID at $VM_IP..."
-
-    cyan "Instructions to create a GitLab Runner authentication token:"
-    cyan "1. Navigate to your GitLab project."
-    cyan "2. Go to 'Settings' > 'CI/CD'."
-    cyan "3. Expand the 'Runners' section."
-    cyan "4. Click 'New project runner' and set up a runner with the following settings:"
-    cyan "   - Tags: self-hosted"
-    cyan "   - Runner Description: 'Runner for $PROJECT_NAME'"
-    cyan "   - Protected: True"
-    cyan "   - Lock to current projects: True"
-    cyan "5. Copy the 'Runner Authentication Token' (starts with glrt-). You will use this token in the next step."
-
-    read -p "Enter your GitLab project authentication token for $PROJECT_NAME: " gitlab_runner_token
-
-    ssh "$VM_USER@$VM_IP" <<EOF
-        sudo gitlab-runner register \
-        --non-interactive \
-        --url https://gitlab.com/ \
-        --token "$gitlab_runner_token" \
-        --description 'Runner for $PROJECT_NAME' \
-        --executor docker \
-        --docker-image "docker:24.0.5" \
-        --docker-privileged
-EOF
-    if [ $? -ne 0 ]; then
-        red "Error registering GitLab Runner on VM $VM_ID."
-        exit 1
-    fi
-    green "GitLab Runner registered on VM $VM_ID."
-}
-
-# Main script logic
-read -p "Enter the GitLab project URL (e.g., https://gitlab.com/<groupname>/<projectname>): " GITLAB_URL
-PROJECT_NAME=$(basename "$gitlab_repo_url")
-VM_ID=$(get_next_id)
-
-
-blue "Creating VM with ID $VM_ID for GitLab Project: $PROJECT_NAME"
-
-# Select VM size
-select_vm_size
-
-# Set up VM parameters
-read -p "Enter VM IP address: " VM_IP
-VM_USER="terraform-user"
-
-# Check if nodes variable exists in vars.tf, if not, initialize it
-if ! grep -q "variable \"nodes\"" vars.tf; then
-  echo 'variable "nodes" {' >> vars.tf
-  echo '  type = map(object({' >> vars.tf
-  echo '    vm_id    = optional(number, 0),' >> vars.tf
-  echo '    template = string' >> vars.tf
-  echo '  }))' >> vars.tf
-  echo '  default = {}' >> vars.tf
-  echo '}' >> vars.tf
-fi
-
-# Backup vars.tf before modification
-cp vars.tf vars.tf.bak
-
-# Append VM details to `nodes` map without specifying cores, memory, or disk
-sed -i '/default = {/a \
-    "'"$PROJECT_NAME"'" = { \
-      vm_id    = '"$VM_ID"', \
-      template = "'"$TEMPLATE_NAME"'" \
-    },
-' vars.tf
-
-green "VM configuration for $PROJECT_NAME added to vars.tf."
-
-# Initialize and apply Terraform
-blue "Initializing and applying the Terraform configuration to create the VM..."
-
-terraform init
-terraform apply -auto-approve
-
-# Register GitLab Runner on the new VM
-register_gitlab_runner_vm
-green "Setup for GitLab Runner VM complete. VM ID: $VM_ID, IP: $VM_IP, Project: $PROJECT_NAME" # Print file contents as-is
--------------------------------
-
-
-./scripts/terraform/setup-terraform.sh # Print the file path
--------------------------------
-#!/bin/bash
-
-# Colors for output
-red() { echo -e "[31m$1[0m"; }
-green() { echo -e "[32m$1[0m"; }
-blue() { echo -e "[34m$1[0m"; }
-cyan() { echo -e "[36m$1[0m"; }
-
-# Provide instructions for Proxmox user setup
-cyan "=================================================="
-cyan "Setting up the necessary user and API token for Terraform in Proxmox"
-cyan "Follow these steps carefully to ensure Terraform can access Proxmox via API:"
-cyan ""
-cyan "1. Create a new user in Proxmox for Terraform"
-cyan "   Go to: Datacenter > Permissions > Users > Add"
-cyan "   Set the following values:"
-cyan "     - User name: terraform-user"
-cyan "     - Realm: pam (Linux PAM standard authentication)"
-cyan "     - Expire: never"
-cyan "     - Enabled: Yes"
-cyan "   Then click 'Add' to create the user."
-cyan ""
-cyan "2. Assign permissions to 'terraform-user'"
-cyan "   Go to: Datacenter > Permissions > Add"
-cyan "   Set the following values:"
-cyan "     - Path: '/' (This grants permissions at the root level)"
-cyan "     - User: terraform-user@pam"
-cyan "     - Role: PVEVMAdmin"
-cyan "   Then click 'Add' to save."
-cyan ""
-cyan "3. Generate an API token for 'terraform-user'"
-cyan "   Go to: Datacenter > Permissions > API Tokens > Add"
-cyan "   Set the following values:"
-cyan "     - User: terraform-user@pam"
-cyan "     - Token ID: terraform-token"
-cyan "     - Privilege Separation: Uncheck"
-cyan "     - Expire: never"
-cyan "   After clicking 'Add', save the generated token. This token will only be visible once, so be sure to copy it!"
-cyan "=================================================="
-cyan ""
-
-# Prompt user for Proxmox details
-read -p "Enter Proxmox Server IP: " PROXMOX_SERVER_IP
-read -p "Enter Proxmox Token ID (default: terraform-user@pam!terraform-token): " PROXMOX_TOKEN_ID
-PROXMOX_TOKEN_ID=${PROXMOX_TOKEN_ID:-"terraform-user@pam!terraform-token"}
-read -p "Enter Proxmox Token Secret: " PROXMOX_TOKEN_SECRET
-read -p "Enter Proxmox Node (default: pve-01): " PROXMOX_NODE
-PROXMOX_NODE=${PROXMOX_NODE:-"pve-01"}
-read -p "Enter the Proxmox Storage Pool (default: local): " STORAGE_POOL
-STORAGE_POOL=${STORAGE_POOL:-"local"}
-
-# Environment variable setup
-export TF_VAR_proxmox_token_id="$PROXMOX_TOKEN_ID"
-export TF_VAR_proxmox_token_secret="$PROXMOX_TOKEN_SECRET"
-
-# Prompt for SSH Key and generate if not exists
-if [[ ! -f ~/.ssh/id_rsa ]]; then
-    blue "Generating SSH key..."
-    ssh-keygen -t rsa -b 2048 -f ~/.ssh/id_rsa -N ""
-    green "SSH key generated at ~/.ssh/id_rsa"
-else
-    green "SSH key already exists at ~/.ssh/id_rsa"
-fi
-
-# Initialize Terraform configuration
-blue "Creating Terraform configuration under ./terraform/ directory..."
-mkdir -p terraform
-cd terraform
-
-# Create vars.tf with extended lxc_containers structure
-cat > vars.tf <<EOL
-variable "pve_server_ip" {
-  description = "Server IP for PVE cluster"
-  type        = string
-  default     = "$PROXMOX_SERVER_IP"
-}
-
-variable "target_node" {
-  description = "Proxmox VE node to target"
-  type        = string
-  default     = "$PROXMOX_NODE"
-}
-
-variable "storage_pool" {
-  description = "Storage pool in Proxmox VE for container storage"
-  type        = string
-  default     = "$STORAGE_POOL"
-}
-
-variable "lxc_containers" {
-  type = map(object({
-    vm_id          = number,
-    template       = string
-  }))
-}
-EOL
-
-# Create main.tf
-cat > main.tf <<EOL
-terraform {
-  required_providers {
-    proxmox = {
-      source  = "telmate/proxmox"
-      version = "2.9.14"
-    }
-  }
-}
-
-provider "proxmox" {
-  pm_api_url          = "https://$PROXMOX_SERVER_IP:8006/api2/json"
-  pm_api_token_id     = var.proxmox_token_id
-  pm_api_token_secret = var.proxmox_token_secret
-  pm_tls_insecure     = true
-}
-
-resource "proxmox_lxc" "containers" {
-  for_each = var.lxc_containers
-
-  hostname         = each.key
-  vmid             = each.value.vm_id
-  template         = each.value.template
-  pubkey           = file(pathexpand("~/.ssh/id_rsa.pub"))
-
-  # Invoke Ansible for provisioning
-  provisioner "local-exec" {
-    command = "ANSIBLE_HOST_KEY_CHECKING=False ansible-playbook -i '${self.network.ipv4.address},' -u root ansible/playbooks/setup-lxc-container.yml"
-  }
-}
-EOL
-
-# Initialize Terraform
-blue "Initializing Terraform configuration..."
-terraform init
-green "Terraform setup is complete! Details have been saved in the ./terraform/ directory."
-green "Run 'terraform apply' to create your LXC containers based on the configuration." # Print file contents as-is
--------------------------------
-
-
-./scripts/pfsense/setup-network.sh # Print the file path
--------------------------------
-#!/bin/bash
-
-# Color functions for output
-red() { echo -e "[31m$1[0m"; }
-green() { echo -e "[32m$1[0m"; }
-blue() { echo -e "[34m$1[0m"; }
-
-# Function to prompt for input with a default value
-prompt_input() {
-    local prompt=$1
-    local default=$2
-    read -p "$(blue "$prompt [$default]:") " input
-    echo "${input:-$default}"
-}
-
-# Function to create bridge configuration for each additional IP
-create_bridge_text() {
-    local ip=$1
-    local bridge_id=$2
-    local mac_address=$3
-    local external_bridge_id=$bridge_id
-    local internal_bridge_id=$((bridge_id * 100))
-
-    # WAN bridge configuration with MAC address and public IP
-    local bridge_config="
-auto vmbr${external_bridge_id}
-iface vmbr${external_bridge_id} inet static
-    address ${ip}
-    netmask ${NETMASK}
-    bridge_ports none
-    bridge_stp off
-    bridge_fd 0
-    hwaddress ether ${mac_address}
-#WAN ${external_bridge_id}
-"
-
-    # LAN bridge configuration without an IP, as it's for internal network only
-    bridge_config+="
-auto vmbr${internal_bridge_id}
-iface vmbr${internal_bridge_id} inet manual
-    bridge_ports none
-    bridge_stp off
-    bridge_fd 0
-#LAN ${internal_bridge_id}
-"
-    echo "$bridge_config"
-}
-
-# Step 1: Collect network information
-collect_network_info() {
-    green "Collecting network configuration..."
-    MAINSERVERIP=$(prompt_input "Main server IP" "192.168.0.1")
-    GATEWAYADDRESS=$(prompt_input "Gateway address" "192.168.0.254")
-    NETMASK=$(prompt_input "Netmask" "255.255.255.0")
-    BROADCASTIP=$(prompt_input "Broadcast IP" "192.168.0.255")
-
-    echo ""
-    blue "Note: For Hetzner, ADDITIONAL_IP_ADDRESSES corresponds to the additional IPs listed under your server in the Hetzner Robot Console."
-    blue "MAC_ADDRESSES correspond to the separate MAC addresses associated with each additional IP in the console."
-    echo ""
-    
-    ADD_IP_ADDRESSES=$(prompt_input "Additional IPs (comma-separated)" "")
-    MAC_ADDRESSES=$(prompt_input "MAC addresses for additional IPs (comma-separated)" "")
-    NETWORK_INTERFACE=$(prompt_input "Network interface" "eth0")
-}
-
-# Step 2: Confirm configuration with the user
-confirm_config() {
-    green "You have entered the following configuration:"
-    echo -e "Main server IP: $MAINSERVERIP
-Gateway address: $GATEWAYADDRESS
-Netmask: $NETMASK
-Broadcast IP: $BROADCASTIP
-Additional IPs: $ADD_IP_ADDRESSES
-MAC addresses: $MAC_ADDRESSES
-Network interface: $NETWORK_INTERFACE"
-    read -p "$(blue "Is this correct? [yes/no]:") " confirmation
-    [[ $confirmation != [Yy]* ]] && { red "Exiting without changes."; exit 1; }
-}
-
-# Step 3: Generate routing rules for additional IPs
-generate_additional_routes() {
-    additional_routes=""
-    IFS=',' read -ra ADDR <<<"$ADD_IP_ADDRESSES"
-    for add_ip in "${ADDR[@]}"; do
-        additional_routes+="    up ip route add $add_ip dev ${NETWORK_INTERFACE}
-"
-    done
-}
-
-# Step 4: Generate configuration for /etc/network/interfaces
-generate_interface_content() {
-    green "Generating network interface configuration..."
-    interfaces_content="
-### Hetzner Online GmbH installimage
-
-source /etc/network/interfaces.d/*
-
-auto lo
-iface lo inet loopback
-iface lo inet6 loopback
-
-iface ${NETWORK_INTERFACE} inet manual
-    up ip route add -net ${GATEWAYADDRESS} netmask ${NETMASK} gw ${GATEWAYADDRESS} vmbr0
-    up sysctl -w net.ipv4.ip_forward=1
-    up sysctl -w net.ipv4.conf.${NETWORK_INTERFACE}.send_redirects=0
-    up sysctl -w net.ipv6.conf.all.forwarding=1
-$additional_routes
-    up ip route add 192.168.0.0/16 via ${MAINSERVERIP} dev vmbr0
-    up ip route add 172.16.0.0/12 via ${MAINSERVERIP} dev vmbr0
-    up ip route add 10.0.0.0/8 via ${MAINSERVERIP} dev vmbr0
-
-auto vmbr0
-iface vmbr0 inet static
-    address  ${MAINSERVERIP}
-    netmask  ${NETMASK}
-    gateway  ${GATEWAYADDRESS}
-    broadcast  ${BROADCASTIP}
-    bridge-ports ${NETWORK_INTERFACE}
-    bridge-stp off
-    bridge-fd 0
-    pointopoint ${GATEWAYADDRESS}
-#Main IP configuration
-"
-}
-
-# Step 5: Add additional IP bridges to configuration
-add_additional_bridges() {
-    IFS=',' read -ra ADDR <<<"$ADD_IP_ADDRESSES"
-    IFS=',' read -ra MACS <<<"$MAC_ADDRESSES"
-    
-    for i in "${!ADDR[@]}"; do
-        bridge_id=$((i + 1))
-        interfaces_content+=$(create_bridge_text "${ADDR[i]}" "$bridge_id" "${MACS[i]}")
-    done
-}
-
-# Step 6: Apply the new configuration
-apply_config() {
-    green "Saving configuration to /etc/network/interfaces..."
-    echo "$interfaces_content" > /tmp/new_interfaces
-    timestamp=$(date +%Y%m%d-%H%M%S)
-    mv /etc/network/interfaces /etc/network/interfaces.bak-$timestamp
-    mv /tmp/new_interfaces /etc/network/interfaces
-    green "Network configuration applied. Restart networking with: 'systemctl restart networking'"
-}
-
-# Execute steps
-collect_network_info
-confirm_config
-generate_additional_routes
-generate_interface_content
-add_additional_bridges
-apply_config # Print file contents as-is
--------------------------------
-
-
-./terraform/main.tf # Print the file path
--------------------------------
-# terraform/main.tf
-
-terraform {
-  required_providers {
-    proxmox = {
-      source  = "telmate/proxmox"
-      version = "2.9.14"
-    }
-  }
-}
-
-provider "proxmox" {
-  pm_api_url          = "https://${var.pve_server_ip}:8006/api2/json"
-  pm_api_token_id     = var.proxmox_token_id
-  pm_api_token_secret = var.proxmox_token_secret
-  pm_tls_insecure     = true
-}
-
-resource "proxmox_lxc" "containers" {
-  for_each       = var.lxc_containers
-
-  target_node    = var.target_node
-  hostname       = each.key
-  vmid           = each.value.vm_id
-  ostemplate     = local.lxc_container_templates[each.value.template].ostemplate
-  unprivileged   = true
-
-  rootfs {
-    storage = var.storage_pool
-    size    = local.lxc_container_templates[each.value.template].disk
-  }
-
-  cores    = local.lxc_container_templates[each.value.template].cores
-  memory   = local.lxc_container_templates[each.value.template].memory
-  swap     = local.lxc_container_templates[each.value.template].swap
-
-  network {
-    name   = "eth0"
-    bridge = "vmbr1"
-    ip     = "dhcp"
-  }
-
-  ssh_public_keys = file(pathexpand("~/.ssh/id_rsa.pub"))
-
-  provisioner "local-exec" {
-    command = "ANSIBLE_HOST_KEY_CHECKING=False ansible-playbook -i '${self.network.ipv4.address},' -u root ansible/playbooks/setup-lxc-container.yml"
-    environment = {
-      CONTAINER_REGISTRY_TOKEN = var.container_registry_token
-      DOCKER_IMAGE_PATH        = var.docker_image_path
-    }
-  }
-} # Print file contents as-is
--------------------------------
-
-
-./terraform/templates/lxc-container-templates.tf # Print the file path
--------------------------------
-# terraform/templates/lxc-container-templates.tf
-
-locals {
-  lxc_container_templates = {
-    "debian-1171-small" = {
-      ostemplate = "local:vztmpl/debian-11-standard_11.7-1_amd64.tar.zst"
-      cores      = 2
-      memory     = 2048
-      disk       = 16
-      swap       = 512
-    }
-    "debian-1171-medium" = {
-      ostemplate = "local:vztmpl/debian-11-standard_11.7-1_amd64.tar.zst"
-      cores      = 4
-      memory     = 4096
-      disk       = 32
-      swap       = 1024
-    }
-    "debian-1171-large" = {
-      ostemplate = "local:vztmpl/debian-11-standard_11.7-1_amd64.tar.zst"
-      cores      = 8
-      memory     = 8192
-      disk       = 64
-      swap       = 2048
-    }
-    "debian-1271-small" = {
-      ostemplate = "local:vztmpl/debian-12-standard_12.7-1_amd64.tar.zst"
-      cores      = 2
-      memory     = 2048
-      disk       = 16
-      swap       = 512
-    }
-    "debian-1271-medium" = {
-      ostemplate = "local:vztmpl/debian-12-standard_12.7-1_amd64.tar.zst"
-      cores      = 4
-      memory     = 4096
-      disk       = 32
-      swap       = 1024
-    }
-    "debian-1271-large" = {
-      ostemplate = "local:vztmpl/debian-12-standard_12.7-1_amd64.tar.zst"
-      cores      = 8
-      memory     = 8192
-      disk       = 64
-      swap       = 2048
-    }
-  }
-} # Print file contents as-is
--------------------------------
-
-
-./terraform/templates/vm-templates.tf # Print the file path
--------------------------------
- # Print file contents as-is
--------------------------------
-
-
-./content.txt # Print the file path
-------------------------------- # Print file contents as-is
--------------------------------
-
-
-./README.md # Print the file path
--------------------------------
-# gitlab-proxmox
-
-InfraOps Guide for Gitlab CI/CD Setup with Hetzner + CloudFlare + Proxmox + PfSense + HaProxy
-
-```bash
-chmod -R +x gitlab-proxmox/
-``` # Print file contents as-is
--------------------------------
-
-
-./ansible/roles/lxc-container-setup/tasks/iso-install.yml # Print the file path
--------------------------------
-# iso-install.yml
----
-- name: Ensure ISO is downloaded
-  get_url:
-    url: "{{ item.iso_url }}"
-    dest: "/var/lib/vz/template/iso/{{ item.iso_url | basename }}"
-  loop: "{{ lookup('file', '../templates/container-sizes.yml') | from_yaml }}"
-  when: not ("/var/lib/vz/template/iso/{{ item.iso_url | basename }}" is file) # Print file contents as-is
--------------------------------
-
-
-./ansible/roles/lxc-container-setup/tasks/main.yml # Print the file path
--------------------------------
----
-- name: Install dependencies
-  apt:
-    name: "{{ item }}"
-    update_cache: yes
-  loop:
-    - apt-transport-https
-    - ca-certificates
-    - curl
-    - software-properties-common
-
-- name: Add Docker GPG key
-  apt_key:
-    url: https://download.docker.com/linux/debian/gpg
-    state: present
-
-- name: Add Docker repository
-  apt_repository:
-    repo: "deb [arch=amd64] https://download.docker.com/linux/debian $(lsb_release -cs) stable"
-    state: present
-
-- name: Install Docker
-  apt:
-    name: docker-ce
-    state: present
-
-- name: Create Docker configuration directory
-  file:
-    path: /etc/docker
-    state: directory
-    mode: "0755"
-
-- name: Copy Docker registry credentials
-  copy:
-    content: "{{ container_registry_token }}"
-    dest: /etc/docker/.docker_credentials
-    mode: "0600"
-
-- name: Login to Docker registry
-  shell: "echo '{{ container_registry_token }}' | docker login -u username --password-stdin registry.gitlab.com"
-
-- name: Pull Docker image
-  docker_image:
-    name: "{{ docker_image_path }}"
-    source: pull
-
-- name: Deploy Docker container
-  docker_container:
-    name: app_container
-    image: "{{ docker_image_path }}"
-    state: started
-    restart_policy: always # Print file contents as-is
--------------------------------
-
-
-./ansible/playbooks/setup-lxc-container.yml # Print the file path
--------------------------------
----
-- name: Set up container with Docker and configurations
-  hosts: all
-  become: true
-  vars:
-    container_registry_token: "{{ lookup('env', 'CONTAINER_REGISTRY_TOKEN') }}"
-    docker_image_path: "{{ lookup('env', 'DOCKER_IMAGE_PATH') }}"
-  roles:
-    - container-setup # Print file contents as-is
--------------------------------
-
-
-./ansible/templates/lxc-container-sizes.yml # Print the file path
--------------------------------
-# lxc-container-sizes.yml
-templates:
-  debian-11110-small:
-    iso_url: https://cdimage.debian.org/cdimage/archive/11.11.0/amd64/iso-cd/debian-11.11.0-amd64-netinst.iso
-    cores: 2
-    memory: 2048
-    disk: 16
-  debian-11110-medium:
-    iso_url: https://cdimage.debian.org/cdimage/archive/11.11.0/amd64/iso-cd/debian-11.11.0-amd64-netinst.iso
-    cores: 4
-    memory: 4096
-    disk: 32
-  debian-11110-large:
-    iso_url: https://cdimage.debian.org/cdimage/archive/11.11.0/amd64/iso-cd/debian-11.11.0-amd64-netinst.iso
-    cores: 8
-    memory: 8192
-    disk: 64
-  debian-1270-small:
-    iso_url: https://cdimage.debian.org/debian-cd/12.7.0/amd64/iso-cd/debian-12.7.0-amd64-netinst.iso
-    cores: 2
-    memory: 2048
-    disk: 16
-  debian-1270-medium:
-    iso_url: https://cdimage.debian.org/debian-cd/12.7.0/amd64/iso-cd/debian-12.7.0-amd64-netinst.iso
-    cores: 4
-    memory: 4096
-    disk: 32
-  debian-1270-large:
-    iso_url: https://cdimage.debian.org/debian-cd/12.7.0/amd64/iso-cd/debian-12.7.0-amd64-netinst.iso
-    cores: 8
-    memory: 8192
-    disk: 64 # Print file contents as-is
--------------------------------
-
-
-./scripts/terraform/setup-docker-lxc.sh # Print the file path
--------------------------------
-#!/bin/bash
-
-# Color output functions
-red() { echo -e "[31m$1[0m"; }
-green() { echo -e "[32m$1[0m"; }
-blue() { echo -e "[34m$1[0m"; }
-cyan() { echo -e "[36m$1[0m"; }
-
-# Function to get the next available 9xx ID
-get_next_id() {
-    for id in {900..999}; do
-        if ! pct status $id &>/dev/null; then
-            echo $id
-            return
-        fi
-    done
-    red "No available ID found in the range 900-999."
-    exit 1
-}
-
-# Function to select VM size
-select_vm_size() {
-    blue "Select VM size for the GitLab Runner:"
-    cyan "1) Small (2 cores, 2048MB memory, 16GB disk)"
-    cyan "2) Medium (4 cores, 4096MB memory, 32GB disk)"
-    cyan "3) Large (8 cores, 8192MB memory, 64GB disk)"
-    read -p "Select size (default: 1): " SIZE_OPTION
-
-    case "$SIZE_OPTION" in
-        2) TEMPLATE_NAME="ubuntu-2204-medium" ;;
-        3) TEMPLATE_NAME="ubuntu-2204-large" ;;
-        *) TEMPLATE_NAME="ubuntu-2204-small" ;;
-    esac
-
-    green "Selected VM size: $TEMPLATE_NAME"
-}
-
-# Function to register GitLab Runner on the VM using authentication token
-register_gitlab_runner_vm() {
-    blue "Registering GitLab Runner on VM $VM_ID at $VM_IP..."
-
-    cyan "Instructions to create a GitLab Runner authentication token:"
-    cyan "1. Navigate to your GitLab project."
-    cyan "2. Go to 'Settings' > 'CI/CD'."
-    cyan "3. Expand the 'Runners' section."
-    cyan "4. Click 'New project runner' and set up a runner with the following settings:"
-    cyan "   - Tags: self-hosted"
-    cyan "   - Runner Description: 'Runner for $PROJECT_NAME'"
-    cyan "   - Protected: True"
-    cyan "   - Lock to current projects: True"
-    cyan "5. Copy the 'Runner Authentication Token' (starts with glrt-). You will use this token in the next step."
-
-    read -p "Enter your GitLab project authentication token for $PROJECT_NAME: " gitlab_runner_token
-
-    ssh "$VM_USER@$VM_IP" <<EOF
-        sudo gitlab-runner register \
-        --non-interactive \
-        --url https://gitlab.com/ \
-        --token "$gitlab_runner_token" \
-        --description 'Runner for $PROJECT_NAME' \
-        --executor docker \
-        --docker-image "docker:24.0.5" \
-        --docker-privileged
-EOF
-    if [ $? -ne 0 ]; then
-        red "Error registering GitLab Runner on VM $VM_ID."
-        exit 1
-    fi
-    green "GitLab Runner registered on VM $VM_ID."
-}
-
-# Main script logic
-read -p "Enter the GitLab project URL (e.g., https://gitlab.com/<groupname>/<projectname>): " GITLAB_URL
-PROJECT_NAME=$(basename "$gitlab_repo_url")
-VM_ID=$(get_next_id)
-
-
-blue "Creating VM with ID $VM_ID for GitLab Project: $PROJECT_NAME"
-
-# Select VM size
-select_vm_size
-
-# Set up VM parameters
-read -p "Enter VM IP address: " VM_IP
-VM_USER="terraform-user"
-
-# Check if nodes variable exists in vars.tf, if not, initialize it
-if ! grep -q "variable \"nodes\"" vars.tf; then
-  echo 'variable "nodes" {' >> vars.tf
-  echo '  type = map(object({' >> vars.tf
-  echo '    vm_id    = optional(number, 0),' >> vars.tf
-  echo '    template = string' >> vars.tf
-  echo '  }))' >> vars.tf
-  echo '  default = {}' >> vars.tf
-  echo '}' >> vars.tf
-fi
-
-# Backup vars.tf before modification
-cp vars.tf vars.tf.bak
-
-# Append VM details to `nodes` map without specifying cores, memory, or disk
-sed -i '/default = {/a \
-    "'"$PROJECT_NAME"'" = { \
-      vm_id    = '"$VM_ID"', \
-      template = "'"$TEMPLATE_NAME"'" \
-    },
-' vars.tf
-
-green "VM configuration for $PROJECT_NAME added to vars.tf."
-
-# Initialize and apply Terraform
-blue "Initializing and applying the Terraform configuration to create the VM..."
-
-terraform init
-terraform apply -auto-approve
-
-# Register GitLab Runner on the new VM
-register_gitlab_runner_vm
-green "Setup for GitLab Runner VM complete. VM ID: $VM_ID, IP: $VM_IP, Project: $PROJECT_NAME" # Print file contents as-is
--------------------------------
-
-
-./scripts/terraform/setup-terraform.sh # Print the file path
--------------------------------
-#!/bin/bash
-
-# Color output functions
-red() { echo -e "[31m$1[0m"; }
-green() { echo -e "[32m$1[0m"; }
-blue() { echo -e "[34m$1[0m"; }
-cyan() { echo -e "[36m$1[0m"; }
-
-# Function to provide Proxmox user setup instructions
-setup_proxmox_user_instructions() {
-  cyan "=================================================="
-  cyan "Setting up the necessary user and API token for Terraform in Proxmox"
-  cyan "Follow these steps carefully to ensure Terraform can access Proxmox via API:"
-  cyan ""
-  cyan "1. Create a new user in Proxmox for Terraform"
-  cyan "   Go to: Datacenter > Permissions > Users > Add"
-  cyan "   Set the following values:"
-  cyan "     - User name: terraform-user"
-  cyan "     - Realm: pam (Linux PAM standard authentication)"
-  cyan "     - Expire: never"
-  cyan "     - Enabled: Yes"
-  cyan "   Then click 'Add' to create the user."
-  cyan ""
-  cyan "2. Assign permissions to 'terraform-user'"
-  cyan "   Go to: Datacenter > Permissions > Add"
-  cyan "   Set the following values:"
-  cyan "     - Path: '/' (This grants permissions at the root level)"
-  cyan "     - User: terraform-user@pam"
-  cyan "     - Role: PVEVMAdmin"
-  cyan "   Then click 'Add' to save."
-  cyan ""
-  cyan "3. Generate an API token for 'terraform-user'"
-  cyan "   Go to: Datacenter > Permissions > API Tokens > Add"
-  cyan "   Set the following values:"
-  cyan "     - User: terraform-user@pam"
-  cyan "     - Token ID: terraform-token"
-  cyan "     - Privilege Separation: Uncheck"
-  cyan "     - Expire: never"
-  cyan "   After clicking 'Add', save the generated token. This token will only be visible once, so be sure to copy it!"
-  cyan "=================================================="
-  cyan ""
-}
-
-# Function to prompt for Proxmox details
-prompt_proxmox_details() {
-  read -p "Enter Proxmox Server IP: " PROXMOX_SERVER_IP
-  read -p "Enter Proxmox Token ID (default: terraform-user@pam!terraform-token): " PROXMOX_TOKEN_ID
-  PROXMOX_TOKEN_ID=${PROXMOX_TOKEN_ID:-"terraform-user@pam!terraform-token"}
-  read -p "Enter Proxmox Token Secret: " PROXMOX_TOKEN_SECRET
-  read -p "Enter Proxmox Node (default: pve-01): " PROXMOX_NODE
-  PROXMOX_NODE=${PROXMOX_NODE:-"pve-01"}
-  read -p "Enter the Proxmox Storage Pool (default: local): " STORAGE_POOL
-  STORAGE_POOL=${STORAGE_POOL:-"local"}
-
-  export TF_VAR_proxmox_token_id="$PROXMOX_TOKEN_ID"
-  export TF_VAR_proxmox_token_secret="$PROXMOX_TOKEN_SECRET"
-}
-
-# Function to check or generate SSH key
-generate_ssh_key() {
-  if [[ ! -f ~/.ssh/id_rsa ]]; then
-    blue "Generating SSH key..."
-    ssh-keygen -t rsa -b 2048 -f ~/.ssh/id_rsa -N ""
-    green "SSH key generated at ~/.ssh/id_rsa"
-  else
-    green "SSH key already exists at ~/.ssh/id_rsa"
-  fi
-}
-
-# Function to create Terraform configuration directory and vars.tf
-create_terraform_configuration() {
-  blue "Creating Terraform configuration under ./terraform/ directory..."
-  mkdir -p terraform
-  cd terraform
-
-  cat > vars.tf <<EOL
-variable "pve_server_ip" {
-  description = "Server IP for PVE cluster"
-  type        = string
-  default     = "$PROXMOX_SERVER_IP"
-}
-
-variable "target_node" {
-  description = "Proxmox VE node to target"
-  type        = string
-  default     = "$PROXMOX_NODE"
-}
-
-variable "storage_pool" {
-  description = "Storage pool in Proxmox VE for container storage"
-  type        = string
-  default     = "$STORAGE_POOL"
-}
-
-variable "lxc_containers" {
-  type = map(object({
-    vm_id    = number,
-    template = string
-  }))
-}
-EOL
-}
-
-# Function to initialize Terraform
-initialize_terraform() {
-  blue "Initializing Terraform configuration..."
-  terraform init
-  green "Terraform setup is complete! Details have been saved in the ./terraform/ directory."
-  green "Run 'terraform apply' to create your LXC containers based on the configuration."
-}
-
-# Main script execution
-setup_proxmox_user_instructions
-prompt_proxmox_details
-generate_ssh_key
-create_terraform_configuration
-initialize_terraform # Print file contents as-is
--------------------------------
-
-
-./scripts/pfsense/setup-network.sh # Print the file path
--------------------------------
-#!/bin/bash
-
-# Color functions for output
-red() { echo -e "[31m$1[0m"; }
-green() { echo -e "[32m$1[0m"; }
-blue() { echo -e "[34m$1[0m"; }
-
-# Function to prompt for input with a default value
-prompt_input() {
-    local prompt=$1
-    local default=$2
-    read -p "$(blue "$prompt [$default]:") " input
-    echo "${input:-$default}"
-}
-
-# Function to create bridge configuration for each additional IP
-create_bridge_text() {
-    local ip=$1
-    local bridge_id=$2
-    local mac_address=$3
-    local external_bridge_id=$bridge_id
-    local internal_bridge_id=$((bridge_id * 100))
-
-    # WAN bridge configuration with MAC address and public IP
-    local bridge_config="
-auto vmbr${external_bridge_id}
-iface vmbr${external_bridge_id} inet static
-    address ${ip}
-    netmask ${NETMASK}
-    bridge_ports none
-    bridge_stp off
-    bridge_fd 0
-    hwaddress ether ${mac_address}
-#WAN ${external_bridge_id}
-"
-
-    # LAN bridge configuration without an IP, as it's for internal network only
-    bridge_config+="
-auto vmbr${internal_bridge_id}
-iface vmbr${internal_bridge_id} inet manual
-    bridge_ports none
-    bridge_stp off
-    bridge_fd 0
-#LAN ${internal_bridge_id}
-"
-    echo "$bridge_config"
-}
-
-# Step 1: Collect network information
-collect_network_info() {
-    green "Collecting network configuration..."
-    MAINSERVERIP=$(prompt_input "Main server IP" "192.168.0.1")
-    GATEWAYADDRESS=$(prompt_input "Gateway address" "192.168.0.254")
-    NETMASK=$(prompt_input "Netmask" "255.255.255.0")
-    BROADCASTIP=$(prompt_input "Broadcast IP" "192.168.0.255")
-
-    echo ""
-    blue "Note: For Hetzner, ADDITIONAL_IP_ADDRESSES corresponds to the additional IPs listed under your server in the Hetzner Robot Console."
-    blue "MAC_ADDRESSES correspond to the separate MAC addresses associated with each additional IP in the console."
-    echo ""
-    
-    ADD_IP_ADDRESSES=$(prompt_input "Additional IPs (comma-separated)" "")
-    MAC_ADDRESSES=$(prompt_input "MAC addresses for additional IPs (comma-separated)" "")
-    NETWORK_INTERFACE=$(prompt_input "Network interface" "eth0")
-}
-
-# Step 2: Confirm configuration with the user
-confirm_config() {
-    green "You have entered the following configuration:"
-    echo -e "Main server IP: $MAINSERVERIP
-Gateway address: $GATEWAYADDRESS
-Netmask: $NETMASK
-Broadcast IP: $BROADCASTIP
-Additional IPs: $ADD_IP_ADDRESSES
-MAC addresses: $MAC_ADDRESSES
-Network interface: $NETWORK_INTERFACE"
-    read -p "$(blue "Is this correct? [yes/no]:") " confirmation
-    [[ $confirmation != [Yy]* ]] && { red "Exiting without changes."; exit 1; }
-}
-
-# Step 3: Generate routing rules for additional IPs
-generate_additional_routes() {
-    additional_routes=""
-    IFS=',' read -ra ADDR <<<"$ADD_IP_ADDRESSES"
-    for add_ip in "${ADDR[@]}"; do
-        additional_routes+="    up ip route add $add_ip dev ${NETWORK_INTERFACE}
-"
-    done
-}
-
-# Step 4: Generate configuration for /etc/network/interfaces
-generate_interface_content() {
-    green "Generating network interface configuration..."
-    interfaces_content="
-### Hetzner Online GmbH installimage
-
-source /etc/network/interfaces.d/*
-
-auto lo
-iface lo inet loopback
-iface lo inet6 loopback
-
-iface ${NETWORK_INTERFACE} inet manual
-    up ip route add -net ${GATEWAYADDRESS} netmask ${NETMASK} gw ${GATEWAYADDRESS} vmbr0
-    up sysctl -w net.ipv4.ip_forward=1
-    up sysctl -w net.ipv4.conf.${NETWORK_INTERFACE}.send_redirects=0
-    up sysctl -w net.ipv6.conf.all.forwarding=1
-$additional_routes
-    up ip route add 192.168.0.0/16 via ${MAINSERVERIP} dev vmbr0
-    up ip route add 172.16.0.0/12 via ${MAINSERVERIP} dev vmbr0
-    up ip route add 10.0.0.0/8 via ${MAINSERVERIP} dev vmbr0
-
-auto vmbr0
-iface vmbr0 inet static
-    address  ${MAINSERVERIP}
-    netmask  ${NETMASK}
-    gateway  ${GATEWAYADDRESS}
-    broadcast  ${BROADCASTIP}
-    bridge-ports ${NETWORK_INTERFACE}
-    bridge-stp off
-    bridge-fd 0
-    pointopoint ${GATEWAYADDRESS}
-#Main IP configuration
-"
-}
-
-# Step 5: Add additional IP bridges to configuration
-add_additional_bridges() {
-    IFS=',' read -ra ADDR <<<"$ADD_IP_ADDRESSES"
-    IFS=',' read -ra MACS <<<"$MAC_ADDRESSES"
-    
-    for i in "${!ADDR[@]}"; do
-        bridge_id=$((i + 1))
-        interfaces_content+=$(create_bridge_text "${ADDR[i]}" "$bridge_id" "${MACS[i]}")
-    done
-}
-
-# Step 6: Apply the new configuration
-apply_config() {
-    green "Saving configuration to /etc/network/interfaces..."
-    echo "$interfaces_content" > /tmp/new_interfaces
-    timestamp=$(date +%Y%m%d-%H%M%S)
-    mv /etc/network/interfaces /etc/network/interfaces.bak-$timestamp
-    mv /tmp/new_interfaces /etc/network/interfaces
-    green "Network configuration applied. Restart networking with: 'systemctl restart networking'"
-}
-
-# Execute steps
-collect_network_info
-confirm_config
-generate_additional_routes
-generate_interface_content
-add_additional_bridges
-apply_config # Print file contents as-is
--------------------------------
-
-
-./terraform/main.tf # Print the file path
--------------------------------
-# terraform/main.tf
-
-terraform {
-  required_providers {
-    proxmox = {
-      source  = "telmate/proxmox"
-      version = "2.9.14"
-    }
-  }
-}
-
-provider "proxmox" {
-  pm_api_url          = "https://${var.pve_server_ip}:8006/api2/json"
-  pm_api_token_id     = var.proxmox_token_id
-  pm_api_token_secret = var.proxmox_token_secret
-  pm_tls_insecure     = true
-}
-
-resource "proxmox_lxc" "containers" {
-  for_each       = var.lxc_containers
-
-  target_node    = var.target_node
-  hostname       = each.key
-  vmid           = each.value.vm_id
-  ostemplate     = local.lxc_container_templates[each.value.template].ostemplate
-  unprivileged   = true
-
-  rootfs {
-    storage = var.storage_pool
-    size    = local.lxc_container_templates[each.value.template].disk
-  }
-
-  cores    = local.lxc_container_templates[each.value.template].cores
-  memory   = local.lxc_container_templates[each.value.template].memory
-  swap     = local.lxc_container_templates[each.value.template].swap
-
-  network {
-    name   = "eth0"
-    bridge = "vmbr1"
-    ip     = "dhcp"
-  }
-
-  ssh_public_keys = file(pathexpand("~/.ssh/id_rsa.pub"))
-
-  provisioner "local-exec" {
-    command = "ANSIBLE_HOST_KEY_CHECKING=False ansible-playbook -i '${self.network.ipv4.address},' -u root ansible/playbooks/setup-lxc-container.yml"
-    environment = {
-      CONTAINER_REGISTRY_TOKEN = var.container_registry_token
-      DOCKER_IMAGE_PATH        = var.docker_image_path
-    }
-  }
-} # Print file contents as-is
--------------------------------
-
-
-./terraform/templates/lxc-container-templates.tf # Print the file path
--------------------------------
-# terraform/templates/lxc-container-templates.tf
-
-locals {
-  lxc_container_templates = {
-    "debian-1171-small" = {
-      ostemplate = "local:vztmpl/debian-11-standard_11.7-1_amd64.tar.zst"
-      cores      = 2
-      memory     = 2048
-      disk       = 16
-      swap       = 512
-    }
-    "debian-1171-medium" = {
-      ostemplate = "local:vztmpl/debian-11-standard_11.7-1_amd64.tar.zst"
-      cores      = 4
-      memory     = 4096
-      disk       = 32
-      swap       = 1024
-    }
-    "debian-1171-large" = {
-      ostemplate = "local:vztmpl/debian-11-standard_11.7-1_amd64.tar.zst"
-      cores      = 8
-      memory     = 8192
-      disk       = 64
-      swap       = 2048
-    }
-    "debian-1271-small" = {
-      ostemplate = "local:vztmpl/debian-12-standard_12.7-1_amd64.tar.zst"
-      cores      = 2
-      memory     = 2048
-      disk       = 16
-      swap       = 512
-    }
-    "debian-1271-medium" = {
-      ostemplate = "local:vztmpl/debian-12-standard_12.7-1_amd64.tar.zst"
-      cores      = 4
-      memory     = 4096
-      disk       = 32
-      swap       = 1024
-    }
-    "debian-1271-large" = {
-      ostemplate = "local:vztmpl/debian-12-standard_12.7-1_amd64.tar.zst"
-      cores      = 8
-      memory     = 8192
-      disk       = 64
-      swap       = 2048
-    }
-  }
-} # Print file contents as-is
--------------------------------
-
-
-./terraform/templates/vm-templates.tf # Print the file path
--------------------------------
- # Print file contents as-is
--------------------------------
-
-
-./content.txt # Print the file path
-------------------------------- # Print file contents as-is
 -------------------------------
 
 
@@ -3891,6 +199,32 @@ container_registry_token: "{{ lookup('env', 'CONTAINER_REGISTRY_TOKEN') }}" # Pr
 -------------------------------
 
 
+./ansible/roles/lxc-container-setup/tasks/update-docker.yml # Print the file path
+-------------------------------
+---
+- name: Log in to container registry if token is provided
+  ansible.builtin.shell: |
+    echo "{{ container_registry_token }}" | docker login {{ registry_url }} --username "{{ docker_registry_username }}" --password-stdin
+  become: yes
+  when: container_registry_token is defined
+
+- name: Pull the latest Docker image
+  ansible.builtin.docker_image:
+    name: "{{ docker_image_path }}"
+    source: pull
+    force_source: yes
+  become: yes
+
+- name: Restart Docker container with updated image
+  ansible.builtin.docker_container:
+    name: "{{ docker_container_name }}"
+    image: "{{ docker_image_path }}"
+    state: started
+    restart_policy: always
+  become: yes # Print file contents as-is
+-------------------------------
+
+
 ./ansible/roles/lxc-container-setup/tasks/main.yml # Print the file path
 -------------------------------
 # ansible/roles/lxc-container-setup/tasks/main.yml
@@ -3914,7 +248,17 @@ container_registry_token: "{{ lookup('env', 'CONTAINER_REGISTRY_TOKEN') }}" # Pr
 
 ./ansible/playbooks/update-lxc-container.yml # Print the file path
 -------------------------------
- # Print file contents as-is
+---
+- name: Update Docker container on LXC
+  hosts: all
+  become: yes
+  roles:
+    - lxc-container-setup
+  tasks:
+    - name: Update Docker image and restart container
+      include_role:
+        name: lxc-container-setup
+      tasks_from: update-docker.yml # Print file contents as-is
 -------------------------------
 
 
@@ -4165,6 +509,1937 @@ initialize_terraform # Print file contents as-is
 
 
 ./scripts/pfsense/setup-network.sh # Print the file path
+-------------------------------
+#!/bin/bash
+
+# Color functions for output
+red() { echo -e "[31m$1[0m"; }
+green() { echo -e "[32m$1[0m"; }
+blue() { echo -e "[34m$1[0m"; }
+
+# Function to prompt for input with a default value
+prompt_input() {
+    local prompt=$1
+    local default=$2
+    read -p "$(blue "$prompt [$default]:") " input
+    echo "${input:-$default}"
+}
+
+# Function to create bridge configuration for each additional IP
+create_bridge_text() {
+    local ip=$1
+    local bridge_id=$2
+    local mac_address=$3
+    local external_bridge_id=$bridge_id
+    local internal_bridge_id=$((bridge_id * 100))
+
+    # WAN bridge configuration with MAC address and public IP
+    local bridge_config="
+auto vmbr${external_bridge_id}
+iface vmbr${external_bridge_id} inet static
+    address ${ip}
+    netmask ${NETMASK}
+    bridge_ports none
+    bridge_stp off
+    bridge_fd 0
+    hwaddress ether ${mac_address}
+#WAN ${external_bridge_id}
+"
+
+    # LAN bridge configuration without an IP, as it's for internal network only
+    bridge_config+="
+auto vmbr${internal_bridge_id}
+iface vmbr${internal_bridge_id} inet manual
+    bridge_ports none
+    bridge_stp off
+    bridge_fd 0
+#LAN ${internal_bridge_id}
+"
+    echo "$bridge_config"
+}
+
+# Step 1: Collect network information
+collect_network_info() {
+    green "Collecting network configuration..."
+    MAINSERVERIP=$(prompt_input "Main server IP" "192.168.0.1")
+    GATEWAYADDRESS=$(prompt_input "Gateway address" "192.168.0.254")
+    NETMASK=$(prompt_input "Netmask" "255.255.255.0")
+    BROADCASTIP=$(prompt_input "Broadcast IP" "192.168.0.255")
+
+    echo ""
+    blue "Note: For Hetzner, ADDITIONAL_IP_ADDRESSES corresponds to the additional IPs listed under your server in the Hetzner Robot Console."
+    blue "MAC_ADDRESSES correspond to the separate MAC addresses associated with each additional IP in the console."
+    echo ""
+    
+    ADD_IP_ADDRESSES=$(prompt_input "Additional IPs (comma-separated)" "")
+    MAC_ADDRESSES=$(prompt_input "MAC addresses for additional IPs (comma-separated)" "")
+    NETWORK_INTERFACE=$(prompt_input "Network interface" "eth0")
+}
+
+# Step 2: Confirm configuration with the user
+confirm_config() {
+    green "You have entered the following configuration:"
+    echo -e "Main server IP: $MAINSERVERIP
+Gateway address: $GATEWAYADDRESS
+Netmask: $NETMASK
+Broadcast IP: $BROADCASTIP
+Additional IPs: $ADD_IP_ADDRESSES
+MAC addresses: $MAC_ADDRESSES
+Network interface: $NETWORK_INTERFACE"
+    read -p "$(blue "Is this correct? [yes/no]:") " confirmation
+    [[ $confirmation != [Yy]* ]] && { red "Exiting without changes."; exit 1; }
+}
+
+# Step 3: Generate routing rules for additional IPs
+generate_additional_routes() {
+    additional_routes=""
+    IFS=',' read -ra ADDR <<<"$ADD_IP_ADDRESSES"
+    for add_ip in "${ADDR[@]}"; do
+        additional_routes+="    up ip route add $add_ip dev ${NETWORK_INTERFACE}
+"
+    done
+}
+
+# Step 4: Generate configuration for /etc/network/interfaces
+generate_interface_content() {
+    green "Generating network interface configuration..."
+    interfaces_content="
+### Hetzner Online GmbH installimage
+
+source /etc/network/interfaces.d/*
+
+auto lo
+iface lo inet loopback
+iface lo inet6 loopback
+
+iface ${NETWORK_INTERFACE} inet manual
+    up ip route add -net ${GATEWAYADDRESS} netmask ${NETMASK} gw ${GATEWAYADDRESS} vmbr0
+    up sysctl -w net.ipv4.ip_forward=1
+    up sysctl -w net.ipv4.conf.${NETWORK_INTERFACE}.send_redirects=0
+    up sysctl -w net.ipv6.conf.all.forwarding=1
+$additional_routes
+    up ip route add 192.168.0.0/16 via ${MAINSERVERIP} dev vmbr0
+    up ip route add 172.16.0.0/12 via ${MAINSERVERIP} dev vmbr0
+    up ip route add 10.0.0.0/8 via ${MAINSERVERIP} dev vmbr0
+
+auto vmbr0
+iface vmbr0 inet static
+    address  ${MAINSERVERIP}
+    netmask  ${NETMASK}
+    gateway  ${GATEWAYADDRESS}
+    broadcast  ${BROADCASTIP}
+    bridge-ports ${NETWORK_INTERFACE}
+    bridge-stp off
+    bridge-fd 0
+    pointopoint ${GATEWAYADDRESS}
+#Main IP configuration
+"
+}
+
+# Step 5: Add additional IP bridges to configuration
+add_additional_bridges() {
+    IFS=',' read -ra ADDR <<<"$ADD_IP_ADDRESSES"
+    IFS=',' read -ra MACS <<<"$MAC_ADDRESSES"
+    
+    for i in "${!ADDR[@]}"; do
+        bridge_id=$((i + 1))
+        interfaces_content+=$(create_bridge_text "${ADDR[i]}" "$bridge_id" "${MACS[i]}")
+    done
+}
+
+# Step 6: Apply the new configuration
+apply_config() {
+    green "Saving configuration to /etc/network/interfaces..."
+    echo "$interfaces_content" > /tmp/new_interfaces
+    timestamp=$(date +%Y%m%d-%H%M%S)
+    mv /etc/network/interfaces /etc/network/interfaces.bak-$timestamp
+    mv /tmp/new_interfaces /etc/network/interfaces
+    green "Network configuration applied. Restart networking with: 'systemctl restart networking'"
+}
+
+# Execute steps
+collect_network_info
+confirm_config
+generate_additional_routes
+generate_interface_content
+add_additional_bridges
+apply_config # Print file contents as-is
+-------------------------------
+
+
+./scripts/kubernetes/setup-talos.sh # Print the file path
+-------------------------------
+#!/bin/bash
+
+# Default configuration values
+VM_ID=300
+PROXMOX_NODE="pve"        # Default Proxmox node name
+DISK_SIZE="32G"
+MEMORY="16384"            # 16 GB RAM
+CPU="8"
+STORAGE_POOL="local"      # Default storage pool
+BRIDGE="vmbr1"            # Default network bridge
+
+# URLs for Talos
+TALOS_VERSION="v1.8.2"
+TALOS_ISO_URL="https://github.com/siderolabs/talos/releases/download/${TALOS_VERSION}/metal-amd64.iso"
+TALOS_ISO_NAME="talos-${TALOS_VERSION}-amd64.iso"
+
+# Colored echo functions
+red() { echo -e "[31m$1[0m"; }
+green() { echo -e "[32m$1[0m"; }
+blue() { echo -e "[34m$1[0m"; }
+cyan() { echo -e "[36m$1[0m"; }
+
+# Function to prompt for user inputs with defaults
+function prompt_for_inputs {
+    cyan "Prompting for configuration values..."
+
+    read -p "Enter Proxmox VM ID (default: $VM_ID): " input_vm_id
+    VM_ID="${input_vm_id:-$VM_ID}"
+
+    read -p "Enter Proxmox Node (default: $PROXMOX_NODE): " input_node
+    PROXMOX_NODE="${input_node:-$PROXMOX_NODE}"
+
+    read -p "Enter Disk Size (default: $DISK_SIZE): " input_disk_size
+    DISK_SIZE="${input_disk_size:-$DISK_SIZE}"
+
+    read -p "Enter Memory in MB (default: $MEMORY): " input_memory
+    MEMORY="${input_memory:-$MEMORY}"
+
+    read -p "Enter CPU Cores (default: $CPU): " input_cpu
+    CPU="${input_cpu:-$CPU}"
+
+    read -p "Enter Storage Pool (default: $STORAGE_POOL): " input_storage_pool
+    STORAGE_POOL="${input_storage_pool:-$STORAGE_POOL}"
+
+    read -p "Enter Network Bridge (default: $BRIDGE): " input_bridge
+    BRIDGE="${input_bridge:-$BRIDGE}"
+}
+
+# Function to download Talos ISO if not already present
+function download_talos_iso {
+    blue "Checking for Talos ISO in Proxmox storage pool..."
+    if pvesm list "$STORAGE_POOL" | grep -q "$TALOS_ISO_NAME"; then
+        green "Talos ISO already exists in $STORAGE_POOL. Skipping download."
+    else
+        blue "Downloading Talos ISO from official source..."
+        wget -q --show-progress -O "/var/lib/vz/template/iso/$TALOS_ISO_NAME" "$TALOS_ISO_URL"
+        green "Download completed."
+    fi
+}
+
+# Function to create the Proxmox VM for Talos
+function create_proxmox_vm {
+    blue "Creating Proxmox VM with Talos ISO attached..."
+
+    qm create "$VM_ID" --name talos --memory "$MEMORY" --cores "$CPU" --net0 virtio,bridge="$BRIDGE" --cdrom "$STORAGE_POOL:iso/$TALOS_ISO_NAME" --scsihw virtio-scsi-pci --scsi0 "$STORAGE_POOL:$DISK_SIZE"
+
+    green "VM $VM_ID created with Talos ISO attached. Adjust VM hardware as needed."
+}
+
+# Function to set up and install Talos
+function configure_talos {
+    blue "Configuring Talos for Kubernetes setup..."
+
+    # Set CPU type if required for newer PVE versions
+    qm set "$VM_ID" --cpu cputype=x86-64-v2
+
+    # Set Qemu Agent and SCSI single controller
+    qm set "$VM_ID" --agent 1 --scsihw virtio-scsi-single
+
+    # Create and apply Talos configuration
+    blue "Generating Talos configuration..."
+    talosctl gen secrets
+    talosctl gen config demo-cluster "https://10.0.10.10:6443" --output rendered/
+
+    green "Talos configuration files created. Apply the configuration to nodes after booting the VM."
+}
+
+# Function to print next steps for the user
+function display_next_steps {
+    cyan "Next steps:"
+    echo "1. Start the VM in Proxmox and open its console."
+    echo "2. Boot into Talos and observe the setup process."
+    echo "3. Once the VM is up, apply the configuration using talosctl commands."
+    echo "4. Regularly back up etcd for disaster recovery."
+    echo "5. Configure and test your Kubernetes cluster as required."
+
+    green "Script complete. Talos is ready to manage your Kubernetes applications."
+}
+
+# Main function to execute the setup steps
+function main {
+    prompt_for_inputs
+    download_talos_iso
+    create_proxmox_vm
+    configure_talos
+    display_next_steps
+}
+
+# Run the script
+main # Print file contents as-is
+-------------------------------
+
+
+./terraform/outputs.tf # Print the file path
+-------------------------------
+# Capture control plane IPs
+output "control_plane_ips" {
+  value = [for vm in module.kubernetes_vms.control_plane : vm.ip_address]
+}
+
+# Capture worker IPs
+output "worker_ips" {
+  value = [for vm in module.kubernetes_vms.worker : vm.ip_address]
+} # Print file contents as-is
+-------------------------------
+
+
+./terraform/main.tf # Print the file path
+-------------------------------
+# main.tf
+terraform {
+  required_providers {
+    proxmox = {
+      source  = "telmate/proxmox"
+      version = "2.9.14"
+    }
+  }
+}
+
+provider "proxmox" {
+  pm_api_url          = "https://${var.proxmox_server_ip}:8006/api2/json"
+  pm_api_token_id     = var.proxmox_token_id
+  pm_api_token_secret = var.proxmox_token_secret
+  pm_tls_insecure     = true
+}
+
+# Importing network/base VMs (PfSense, Fedora, etc.)
+module "network_vms" {
+  source       = "./modules/network"
+  vm_id_min    = 100
+  vm_id_max    = 199
+  additional_mac_address = var.additional_mac_address
+  storage_pool = var.storage_pool
+  target_node  = var.target_node
+}
+
+# Importing service VMs (Mattermost, GitLab, etc.)
+module "service_vms" {
+  source       = "./modules/service"
+  vm_id_min    = 200
+  vm_id_max    = 299
+  storage_pool = var.storage_pool
+  target_node  = var.target_node
+}
+
+# Importing Kubernetes VMs (Talos Control and Worker Nodes)
+module "kubernetes_vms" {
+  source         = "./modules/kubernetes"
+  vm_id_min      = 300
+  vm_id_max      = 399
+  storage_pool   = var.storage_pool
+  target_node    = var.target_node
+  control_count  = 3
+  worker_count   = 3
+}
+
+# Importing database VMs (PostgreSQL, MongoDB, etc.)
+module "database_vms" {
+  source       = "./modules/database"
+  vm_id_min    = 400
+  vm_id_max    = 499
+  storage_pool = var.storage_pool
+  target_node  = var.target_node
+} # Print file contents as-is
+-------------------------------
+
+
+./terraform/modules/database/main.tf # Print the file path
+-------------------------------
+# modules/database/main.tf
+variable "vm_id_min" { type = number }
+variable "vm_id_max" { type = number }
+variable "storage_pool" { type = string }
+variable "target_node" { type = string }
+
+# Define PostgreSQL VM
+resource "proxmox_lxc" "postgresql" {
+  vmid       = var.vm_id_min
+  hostname   = "postgresql"
+  ostemplate = "${var.storage_pool}:vztmpl/debian-12-turnkey-postgresql_18.1-1_amd64.tar.gz"
+  target_node = var.target_node
+  cores      = 2
+  memory     = 4096
+  rootfs     = "${var.storage_pool}:96G"
+  network {
+    name   = "eth0"
+    bridge = "vmbr1"
+    ip     = "dhcp"
+  }
+} # Print file contents as-is
+-------------------------------
+
+
+./terraform/modules/network/main.tf # Print the file path
+-------------------------------
+# modules/network/main.tf
+
+variable "vm_id_min" { type = number }
+variable "vm_id_max" { type = number }
+variable "storage_pool" { type = string }
+variable "target_node" { type = string }
+variable "additional_mac_address" { type = string }
+
+# Define PfSense VM
+resource "proxmox_vm_qemu" "pfsense" {
+  vmid         = var.vm_id_min
+  name         = "pfsense"
+  memory       = 2048
+  cores        = 2
+  target_node  = var.target_node
+
+  # Disk configuration
+  disk {
+    size    = "32G"
+    storage = var.storage_pool
+  }
+
+  # Attach the PfSense ISO image
+  cdrom {
+    file    = "${var.storage_pool}:iso/netgate-installer-amd64.iso"
+  }
+
+  # Network interfaces
+  network {
+    model  = "e1000"
+    bridge = "vmbr0"
+    mac    = var.additional_mac_address  # MAC address variable for vmbr0
+    firewall = true
+  }
+
+  network {
+    model  = "e1000"
+    bridge = "vmbr1"  # MAC will be generated automatically
+    firewall = true
+  }
+}
+
+# Define Fedora VM
+resource "proxmox_vm_qemu" "fedora" {
+  vmid         = var.vm_id_min + 1
+  name         = "fedora"
+  memory       = 4096
+  cores        = 2
+  target_node  = var.target_node
+
+  # Disk configuration
+  disk {
+    size    = "32G"
+    storage = var.storage_pool
+  }
+
+  # Attach the Fedora ISO image
+  cdrom {
+    file    = "${var.storage_pool}:iso/Fedora-Workstation-Live-x86_64-40-1.14.iso"
+  }
+
+  # Network interface
+  network {
+    model  = "virtio"
+    bridge = "vmbr1"  # MAC will be generated automatically
+    firewall = true
+  }
+} # Print file contents as-is
+-------------------------------
+
+
+./terraform/modules/service/main.tf # Print the file path
+-------------------------------
+# modules/service/main.tf
+variable "vm_id_min" { type = number }
+variable "vm_id_max" { type = number }
+variable "storage_pool" { type = string }
+variable "target_node" { type = string }
+
+# Define Mattermost VM
+resource "proxmox_lxc" "mattermost" {
+  vmid       = var.vm_id_min
+  hostname   = "mattermost"
+  ostemplate = "${var.storage_pool}:vztmpl/debian-12-turnkey-mattermost_18.0-1_amd64.tar.gz"
+  target_node = var.target_node
+  cores      = 2
+  memory     = 4096
+  rootfs     = "${var.storage_pool}:16G"
+  network {
+    name   = "eth0"
+    bridge = "vmbr1"
+    ip     = "dhcp"
+  }
+} # Print file contents as-is
+-------------------------------
+
+
+./terraform/modules/kubernetes/main.tf # Print the file path
+-------------------------------
+# modules/kubernetes/main.tf
+variable "vm_id_min" { type = number }
+variable "vm_id_max" { type = number }
+variable "storage_pool" { type = string }
+variable "target_node" { type = string }
+variable "control_count" { type = number }
+variable "worker_count" { type = number }
+
+# Define Kubernetes Control Plane Nodes
+resource "proxmox_vm_qemu" "k8s_control_plane" {
+  count        = var.control_count
+  vmid         = var.vm_id_min + count.index
+  name         = "k8s-control-plane-${count.index}"
+  memory       = 2048
+  cores        = 2
+  target_node  = var.target_node
+  network {
+    bridge = "vmbr1"
+  }
+  disk {
+    size    = "32G"
+    storage = var.storage_pool
+  }
+}
+
+# Define Kubernetes Worker Nodes
+resource "proxmox_vm_qemu" "k8s_worker" {
+  count        = var.worker_count
+  vmid         = var.vm_id_min + var.control_count + count.index
+  name         = "k8s-worker-${count.index}"
+  memory       = 2048
+  cores        = 4
+  target_node  = var.target_node
+  network {
+    bridge = "vmbr1"
+  }
+  disk {
+    size    = "32"
+    storage = var.storage_pool
+  }
+} # Print file contents as-is
+-------------------------------
+
+
+./terraform/vars.tf # Print the file path
+-------------------------------
+# vars.tf
+variable "proxmox_server_ip" {
+  description = "Proxmox server IP address"
+  type        = string
+}
+
+variable "proxmox_token_id" {
+  description = "Proxmox API token ID"
+  type        = string
+}
+
+variable "proxmox_token_secret" {
+  description = "Proxmox API token secret"
+  type        = string
+}
+
+variable "additional_mac_address" {
+  description = "MAC address for the additional IP on Hetzner's network"
+  type        = string
+}
+
+variable "storage_pool" {
+  description = "Default storage pool for VMs"
+  type        = string
+  default     = "local"
+}
+
+variable "target_node" {
+  description = "Target Proxmox node for VM deployment"
+  type        = string
+  default     = "pve"
+} # Print file contents as-is
+-------------------------------
+
+
+./content.txt # Print the file path
+-------------------------------
+
+./terraform/main.tf # Print the file path
+-------------------------------
+# terraform/main.tf
+
+terraform {
+  required_providers {
+    proxmox = {
+      source  = "telmate/proxmox"
+      version = "2.9.14"
+    }
+  }
+}
+
+provider "proxmox" {
+  pm_api_url          = "https://${var.pve_server_ip}:8006/api2/json"
+  pm_api_token_id     = var.proxmox_token_id
+  pm_api_token_secret = var.proxmox_token_secret
+  pm_tls_insecure     = true
+}
+
+resource "proxmox_lxc" "containers" {
+  for_each       = var.lxc_containers
+
+  target_node    = var.target_node
+  hostname       = each.key
+  vmid           = each.value.vm_id
+  ostemplate     = local.lxc_container_templates[each.value.template].ostemplate
+  unprivileged   = true
+
+  rootfs {
+    storage = var.storage_pool
+    size    = local.lxc_container_templates[each.value.template].disk
+  }
+
+  cores    = local.lxc_container_templates[each.value.template].cores
+  memory   = local.lxc_container_templates[each.value.template].memory
+  swap     = local.lxc_container_templates[each.value.template].swap
+
+  network {
+    name   = "eth0"
+    bridge = "vmbr1"
+    ip     = "dhcp"
+  }
+
+  ssh_public_keys = file(pathexpand("~/.ssh/id_rsa.pub"))
+
+  provisioner "local-exec" {
+    command = "ANSIBLE_HOST_KEY_CHECKING=False ansible-playbook -i '${self.network.ipv4.address},' -u root ansible/playbooks/setup-lxc-container.yml"
+    environment = {
+      CONTAINER_REGISTRY_TOKEN = var.container_registry_token
+      DOCKER_IMAGE_PATH        = var.docker_image_path
+    }
+  }
+} # Print file contents as-is
+-------------------------------
+
+
+./terraform/templates/lxc-container-templates.tf # Print the file path
+-------------------------------
+# terraform/templates/lxc-container-templates.tf
+
+locals {
+  lxc_container_templates = {
+    "debian-1171-small" = {
+      ostemplate = "local:vztmpl/debian-11-standard_11.7-1_amd64.tar.zst"
+      cores      = 2
+      memory     = 2048
+      disk       = 16
+      swap       = 512
+    }
+    "debian-1171-medium" = {
+      ostemplate = "local:vztmpl/debian-11-standard_11.7-1_amd64.tar.zst"
+      cores      = 4
+      memory     = 4096
+      disk       = 32
+      swap       = 1024
+    }
+    "debian-1171-large" = {
+      ostemplate = "local:vztmpl/debian-11-standard_11.7-1_amd64.tar.zst"
+      cores      = 8
+      memory     = 8192
+      disk       = 64
+      swap       = 2048
+    }
+    "debian-1271-small" = {
+      ostemplate = "local:vztmpl/debian-12-standard_12.7-1_amd64.tar.zst"
+      cores      = 2
+      memory     = 2048
+      disk       = 16
+      swap       = 512
+    }
+    "debian-1271-medium" = {
+      ostemplate = "local:vztmpl/debian-12-standard_12.7-1_amd64.tar.zst"
+      cores      = 4
+      memory     = 4096
+      disk       = 32
+      swap       = 1024
+    }
+    "debian-1271-large" = {
+      ostemplate = "local:vztmpl/debian-12-standard_12.7-1_amd64.tar.zst"
+      cores      = 8
+      memory     = 8192
+      disk       = 64
+      swap       = 2048
+    }
+  }
+} # Print file contents as-is
+-------------------------------
+
+
+./terraform/templates/vm-templates.tf # Print the file path
+-------------------------------
+ # Print file contents as-is
+-------------------------------
+
+
+./README.md # Print the file path
+-------------------------------
+# gitlab-proxmox
+
+InfraOps Guide for Gitlab CI/CD Setup with Hetzner + CloudFlare + Proxmox + PfSense + HaProxy
+
+```bash
+chmod -R +x ./
+``` # Print file contents as-is
+-------------------------------
+
+
+./ansible/roles/lxc-container-setup/vars/main.yml # Print the file path
+-------------------------------
+# ansible/roles/lxc-container-setup/vars/main.yml
+---
+# Default values - can be overridden by environment variables
+registry_url: "{{ lookup('env', 'CONTAINER_REGISTRY_URL') | default('docker.io') }}"
+docker_image_path: "{{ lookup('env', 'DOCKER_IMAGE_PATH') }}"
+container_registry_token: "{{ lookup('env', 'CONTAINER_REGISTRY_TOKEN') }}" # Print file contents as-is
+-------------------------------
+
+
+./ansible/roles/lxc-container-setup/tasks/configure-docker.yml # Print the file path
+-------------------------------
+# ansible/roles/lxc-container-setup/tasks/configure-docker.yml
+---
+- name: Install Docker
+  apt:
+    name: docker-ce
+    state: present
+  become: yes
+
+- name: Start and enable Docker service
+  systemd:
+    name: docker
+    enabled: yes
+    state: started
+  become: yes
+
+- name: Log in to container registry
+  shell: |
+    echo "{{ container_registry_token }}" | docker login {{ registry_url }} --username username --password-stdin
+  become: yes
+  when: container_registry_token is defined
+
+- name: Pull Docker image
+  docker_image:
+    name: "{{ docker_image_path }}"
+    source: pull
+  become: yes
+  when: docker_image_path is defined # Print file contents as-is
+-------------------------------
+
+
+./ansible/roles/lxc-container-setup/tasks/install-packages.yml # Print the file path
+-------------------------------
+# ansible/roles/lxc-container-setup/tasks/install-packages.yml
+---
+- name: Update package manager and cache
+  apt:
+    update_cache: yes
+    cache_valid_time: 3600
+  become: yes
+
+- name: Install required packages
+  apt:
+    name:
+      - apt-transport-https
+      - ca-certificates
+      - curl
+      - software-properties-common
+      - gnupg
+    state: present
+  become: yes
+
+- name: Add Docker GPG key and repository
+  ansible.builtin.shell: |
+    curl -fsSL https://download.docker.com/linux/debian/gpg | apt-key add -
+    add-apt-repository "deb [arch=amd64] https://download.docker.com/linux/debian $(lsb_release -cs) stable"
+  become: yes # Print file contents as-is
+-------------------------------
+
+
+./ansible/roles/lxc-container-setup/tasks/update-docker.yml # Print the file path
+-------------------------------
+---
+- name: Log in to container registry if token is provided
+  ansible.builtin.shell: |
+    echo "{{ container_registry_token }}" | docker login {{ registry_url }} --username "{{ docker_registry_username }}" --password-stdin
+  become: yes
+  when: container_registry_token is defined
+
+- name: Pull the latest Docker image
+  ansible.builtin.docker_image:
+    name: "{{ docker_image_path }}"
+    source: pull
+    force_source: yes
+  become: yes
+
+- name: Restart Docker container with updated image
+  ansible.builtin.docker_container:
+    name: "{{ docker_container_name }}"
+    image: "{{ docker_image_path }}"
+    state: started
+    restart_policy: always
+  become: yes # Print file contents as-is
+-------------------------------
+
+
+./ansible/roles/lxc-container-setup/tasks/main.yml # Print the file path
+-------------------------------
+# ansible/roles/lxc-container-setup/tasks/main.yml
+---
+- include_tasks: install-packages.yml
+- include_tasks: configure-docker.yml # Print file contents as-is
+-------------------------------
+
+
+./ansible/playbooks/setup-lxc-container.yml # Print the file path
+-------------------------------
+# ansible/playbooks/setup-lxc-container.yml
+---
+- name: Set up LXC container with Docker and configurations
+  hosts: all
+  become: yes
+  roles:
+    - lxc-container-setup # Print file contents as-is
+-------------------------------
+
+
+./ansible/playbooks/update-lxc-container.yml # Print the file path
+-------------------------------
+---
+- name: Update Docker container on LXC
+  hosts: all
+  become: yes
+  roles:
+    - lxc-container-setup
+  tasks:
+    - name: Update Docker image and restart container
+      include_role:
+        name: lxc-container-setup
+      tasks_from: update-docker.yml # Print file contents as-is
+-------------------------------
+
+
+./scripts/terraform/setup-docker-lxc.sh # Print the file path
+-------------------------------
+#!/bin/bash
+
+# Color output functions
+red() { echo -e "[31m$1[0m"; }
+green() { echo -e "[32m$1[0m"; }
+blue() { echo -e "[34m$1[0m"; }
+cyan() { echo -e "[36m$1[0m"; }
+
+# Function to get the next available 9xx ID
+get_next_id() {
+    for id in {900..999}; do
+        if ! pct status $id &>/dev/null; then
+            echo $id
+            return
+        fi
+    done
+    red "No available ID found in the range 900-999."
+    exit 1
+}
+
+# Function to select VM size
+select_vm_size() {
+    blue "Select VM size for the GitLab Runner:"
+    cyan "1) Small (2 cores, 2048MB memory, 16GB disk)"
+    cyan "2) Medium (4 cores, 4096MB memory, 32GB disk)"
+    cyan "3) Large (8 cores, 8192MB memory, 64GB disk)"
+    read -p "Select size (default: 1): " SIZE_OPTION
+
+    case "$SIZE_OPTION" in
+        2) TEMPLATE_NAME="ubuntu-2204-medium" ;;
+        3) TEMPLATE_NAME="ubuntu-2204-large" ;;
+        *) TEMPLATE_NAME="ubuntu-2204-small" ;;
+    esac
+
+    green "Selected VM size: $TEMPLATE_NAME"
+}
+
+# Function to register GitLab Runner on the VM using authentication token
+register_gitlab_runner_vm() {
+    blue "Registering GitLab Runner on VM $VM_ID at $VM_IP..."
+
+    cyan "Instructions to create a GitLab Runner authentication token:"
+    cyan "1. Navigate to your GitLab project."
+    cyan "2. Go to 'Settings' > 'CI/CD'."
+    cyan "3. Expand the 'Runners' section."
+    cyan "4. Click 'New project runner' and set up a runner with the following settings:"
+    cyan "   - Tags: self-hosted"
+    cyan "   - Runner Description: 'Runner for $PROJECT_NAME'"
+    cyan "   - Protected: True"
+    cyan "   - Lock to current projects: True"
+    cyan "5. Copy the 'Runner Authentication Token' (starts with glrt-). You will use this token in the next step."
+
+    read -p "Enter your GitLab project authentication token for $PROJECT_NAME: " gitlab_runner_token
+
+    ssh "$VM_USER@$VM_IP" <<EOF
+        sudo gitlab-runner register \
+        --non-interactive \
+        --url https://gitlab.com/ \
+        --token "$gitlab_runner_token" \
+        --description 'Runner for $PROJECT_NAME' \
+        --executor docker \
+        --docker-image "docker:24.0.5" \
+        --docker-privileged
+EOF
+    if [ $? -ne 0 ]; then
+        red "Error registering GitLab Runner on VM $VM_ID."
+        exit 1
+    fi
+    green "GitLab Runner registered on VM $VM_ID."
+}
+
+# Main script logic
+read -p "Enter the GitLab project URL (e.g., https://gitlab.com/<groupname>/<projectname>): " GITLAB_URL
+PROJECT_NAME=$(basename "$gitlab_repo_url")
+VM_ID=$(get_next_id)
+
+
+blue "Creating VM with ID $VM_ID for GitLab Project: $PROJECT_NAME"
+
+# Select VM size
+select_vm_size
+
+# Set up VM parameters
+read -p "Enter VM IP address: " VM_IP
+VM_USER="terraform-user"
+
+# Check if nodes variable exists in vars.tf, if not, initialize it
+if ! grep -q "variable \"nodes\"" vars.tf; then
+  echo 'variable "nodes" {' >> vars.tf
+  echo '  type = map(object({' >> vars.tf
+  echo '    vm_id    = optional(number, 0),' >> vars.tf
+  echo '    template = string' >> vars.tf
+  echo '  }))' >> vars.tf
+  echo '  default = {}' >> vars.tf
+  echo '}' >> vars.tf
+fi
+
+# Backup vars.tf before modification
+cp vars.tf vars.tf.bak
+
+# Append VM details to `nodes` map without specifying cores, memory, or disk
+sed -i '/default = {/a \
+    "'"$PROJECT_NAME"'" = { \
+      vm_id    = '"$VM_ID"', \
+      template = "'"$TEMPLATE_NAME"'" \
+    },
+' vars.tf
+
+green "VM configuration for $PROJECT_NAME added to vars.tf."
+
+# Initialize and apply Terraform
+blue "Initializing and applying the Terraform configuration to create the VM..."
+
+terraform init
+terraform apply -auto-approve
+
+# Register GitLab Runner on the new VM
+register_gitlab_runner_vm
+green "Setup for GitLab Runner VM complete. VM ID: $VM_ID, IP: $VM_IP, Project: $PROJECT_NAME" # Print file contents as-is
+-------------------------------
+
+
+./scripts/terraform/setup-terraform.sh # Print the file path
+-------------------------------
+#!/bin/bash
+
+# Color output functions
+red() { echo -e "[31m$1[0m"; }
+green() { echo -e "[32m$1[0m"; }
+blue() { echo -e "[34m$1[0m"; }
+cyan() { echo -e "[36m$1[0m"; }
+
+# Function to provide Proxmox user setup instructions
+setup_proxmox_user_instructions() {
+  cyan "=================================================="
+  cyan "Setting up the necessary user and API token for Terraform in Proxmox"
+  cyan "Follow these steps carefully to ensure Terraform can access Proxmox via API:"
+  cyan ""
+  cyan "1. Create a new user in Proxmox for Terraform"
+  cyan "   Go to: Datacenter > Permissions > Users > Add"
+  cyan "   Set the following values:"
+  cyan "     - User name: terraform-user"
+  cyan "     - Realm: pam (Linux PAM standard authentication)"
+  cyan "     - Expire: never"
+  cyan "     - Enabled: Yes"
+  cyan "   Then click 'Add' to create the user."
+  cyan ""
+  cyan "2. Assign permissions to 'terraform-user'"
+  cyan "   Go to: Datacenter > Permissions > Add"
+  cyan "   Set the following values:"
+  cyan "     - Path: '/' (This grants permissions at the root level)"
+  cyan "     - User: terraform-user@pam"
+  cyan "     - Role: PVEVMAdmin"
+  cyan "   Then click 'Add' to save."
+  cyan ""
+  cyan "3. Generate an API token for 'terraform-user'"
+  cyan "   Go to: Datacenter > Permissions > API Tokens > Add"
+  cyan "   Set the following values:"
+  cyan "     - User: terraform-user@pam"
+  cyan "     - Token ID: terraform-token"
+  cyan "     - Privilege Separation: Uncheck"
+  cyan "     - Expire: never"
+  cyan "   After clicking 'Add', save the generated token. This token will only be visible once, so be sure to copy it!"
+  cyan "=================================================="
+  cyan ""
+}
+
+# Function to prompt for Proxmox details
+prompt_proxmox_details() {
+  read -p "Enter Proxmox Server IP: " PROXMOX_SERVER_IP
+  read -p "Enter Proxmox Token ID (default: terraform-user@pam!terraform-token): " PROXMOX_TOKEN_ID
+  PROXMOX_TOKEN_ID=${PROXMOX_TOKEN_ID:-"terraform-user@pam!terraform-token"}
+  read -p "Enter Proxmox Token Secret: " PROXMOX_TOKEN_SECRET
+  read -p "Enter Proxmox Node (default: pve-01): " PROXMOX_NODE
+  PROXMOX_NODE=${PROXMOX_NODE:-"pve-01"}
+  read -p "Enter the Proxmox Storage Pool (default: local): " STORAGE_POOL
+  STORAGE_POOL=${STORAGE_POOL:-"local"}
+
+  export TF_VAR_proxmox_token_id="$PROXMOX_TOKEN_ID"
+  export TF_VAR_proxmox_token_secret="$PROXMOX_TOKEN_SECRET"
+}
+
+# Function to check or generate SSH key
+generate_ssh_key() {
+  if [[ ! -f ~/.ssh/id_rsa ]]; then
+    blue "Generating SSH key..."
+    ssh-keygen -t rsa -b 2048 -f ~/.ssh/id_rsa -N ""
+    green "SSH key generated at ~/.ssh/id_rsa"
+  else
+    green "SSH key already exists at ~/.ssh/id_rsa"
+  fi
+}
+
+# Function to create Terraform configuration directory and vars.tf
+create_terraform_configuration() {
+  blue "Creating Terraform configuration under ./terraform/ directory..."
+  mkdir -p terraform
+  cd terraform
+
+  cat > vars.tf <<EOL
+variable "pve_server_ip" {
+  description = "Server IP for PVE cluster"
+  type        = string
+  default     = "$PROXMOX_SERVER_IP"
+}
+
+variable "target_node" {
+  description = "Proxmox VE node to target"
+  type        = string
+  default     = "$PROXMOX_NODE"
+}
+
+variable "storage_pool" {
+  description = "Storage pool in Proxmox VE for container storage"
+  type        = string
+  default     = "$STORAGE_POOL"
+}
+
+variable "lxc_containers" {
+  type = map(object({
+    vm_id    = number,
+    template = string
+  }))
+}
+EOL
+}
+
+# Function to initialize Terraform
+initialize_terraform() {
+  blue "Initializing Terraform configuration..."
+  terraform init
+  green "Terraform setup is complete! Details have been saved in the ./terraform/ directory."
+  green "Run 'terraform apply' to create your LXC containers based on the configuration."
+}
+
+# Main script execution
+setup_proxmox_user_instructions
+prompt_proxmox_details
+generate_ssh_key
+create_terraform_configuration
+initialize_terraform # Print file contents as-is
+-------------------------------
+
+
+./scripts/pfsense/setup-network.sh # Print the file path
+-------------------------------
+#!/bin/bash
+
+# Color functions for output
+red() { echo -e "[31m$1[0m"; }
+green() { echo -e "[32m$1[0m"; }
+blue() { echo -e "[34m$1[0m"; }
+
+# Function to prompt for input with a default value
+prompt_input() {
+    local prompt=$1
+    local default=$2
+    read -p "$(blue "$prompt [$default]:") " input
+    echo "${input:-$default}"
+}
+
+# Function to create bridge configuration for each additional IP
+create_bridge_text() {
+    local ip=$1
+    local bridge_id=$2
+    local mac_address=$3
+    local external_bridge_id=$bridge_id
+    local internal_bridge_id=$((bridge_id * 100))
+
+    # WAN bridge configuration with MAC address and public IP
+    local bridge_config="
+auto vmbr${external_bridge_id}
+iface vmbr${external_bridge_id} inet static
+    address ${ip}
+    netmask ${NETMASK}
+    bridge_ports none
+    bridge_stp off
+    bridge_fd 0
+    hwaddress ether ${mac_address}
+#WAN ${external_bridge_id}
+"
+
+    # LAN bridge configuration without an IP, as it's for internal network only
+    bridge_config+="
+auto vmbr${internal_bridge_id}
+iface vmbr${internal_bridge_id} inet manual
+    bridge_ports none
+    bridge_stp off
+    bridge_fd 0
+#LAN ${internal_bridge_id}
+"
+    echo "$bridge_config"
+}
+
+# Step 1: Collect network information
+collect_network_info() {
+    green "Collecting network configuration..."
+    MAINSERVERIP=$(prompt_input "Main server IP" "192.168.0.1")
+    GATEWAYADDRESS=$(prompt_input "Gateway address" "192.168.0.254")
+    NETMASK=$(prompt_input "Netmask" "255.255.255.0")
+    BROADCASTIP=$(prompt_input "Broadcast IP" "192.168.0.255")
+
+    echo ""
+    blue "Note: For Hetzner, ADDITIONAL_IP_ADDRESSES corresponds to the additional IPs listed under your server in the Hetzner Robot Console."
+    blue "MAC_ADDRESSES correspond to the separate MAC addresses associated with each additional IP in the console."
+    echo ""
+    
+    ADD_IP_ADDRESSES=$(prompt_input "Additional IPs (comma-separated)" "")
+    MAC_ADDRESSES=$(prompt_input "MAC addresses for additional IPs (comma-separated)" "")
+    NETWORK_INTERFACE=$(prompt_input "Network interface" "eth0")
+}
+
+# Step 2: Confirm configuration with the user
+confirm_config() {
+    green "You have entered the following configuration:"
+    echo -e "Main server IP: $MAINSERVERIP
+Gateway address: $GATEWAYADDRESS
+Netmask: $NETMASK
+Broadcast IP: $BROADCASTIP
+Additional IPs: $ADD_IP_ADDRESSES
+MAC addresses: $MAC_ADDRESSES
+Network interface: $NETWORK_INTERFACE"
+    read -p "$(blue "Is this correct? [yes/no]:") " confirmation
+    [[ $confirmation != [Yy]* ]] && { red "Exiting without changes."; exit 1; }
+}
+
+# Step 3: Generate routing rules for additional IPs
+generate_additional_routes() {
+    additional_routes=""
+    IFS=',' read -ra ADDR <<<"$ADD_IP_ADDRESSES"
+    for add_ip in "${ADDR[@]}"; do
+        additional_routes+="    up ip route add $add_ip dev ${NETWORK_INTERFACE}
+"
+    done
+}
+
+# Step 4: Generate configuration for /etc/network/interfaces
+generate_interface_content() {
+    green "Generating network interface configuration..."
+    interfaces_content="
+### Hetzner Online GmbH installimage
+
+source /etc/network/interfaces.d/*
+
+auto lo
+iface lo inet loopback
+iface lo inet6 loopback
+
+iface ${NETWORK_INTERFACE} inet manual
+    up ip route add -net ${GATEWAYADDRESS} netmask ${NETMASK} gw ${GATEWAYADDRESS} vmbr0
+    up sysctl -w net.ipv4.ip_forward=1
+    up sysctl -w net.ipv4.conf.${NETWORK_INTERFACE}.send_redirects=0
+    up sysctl -w net.ipv6.conf.all.forwarding=1
+$additional_routes
+    up ip route add 192.168.0.0/16 via ${MAINSERVERIP} dev vmbr0
+    up ip route add 172.16.0.0/12 via ${MAINSERVERIP} dev vmbr0
+    up ip route add 10.0.0.0/8 via ${MAINSERVERIP} dev vmbr0
+
+auto vmbr0
+iface vmbr0 inet static
+    address  ${MAINSERVERIP}
+    netmask  ${NETMASK}
+    gateway  ${GATEWAYADDRESS}
+    broadcast  ${BROADCASTIP}
+    bridge-ports ${NETWORK_INTERFACE}
+    bridge-stp off
+    bridge-fd 0
+    pointopoint ${GATEWAYADDRESS}
+#Main IP configuration
+"
+}
+
+# Step 5: Add additional IP bridges to configuration
+add_additional_bridges() {
+    IFS=',' read -ra ADDR <<<"$ADD_IP_ADDRESSES"
+    IFS=',' read -ra MACS <<<"$MAC_ADDRESSES"
+    
+    for i in "${!ADDR[@]}"; do
+        bridge_id=$((i + 1))
+        interfaces_content+=$(create_bridge_text "${ADDR[i]}" "$bridge_id" "${MACS[i]}")
+    done
+}
+
+# Step 6: Apply the new configuration
+apply_config() {
+    green "Saving configuration to /etc/network/interfaces..."
+    echo "$interfaces_content" > /tmp/new_interfaces
+    timestamp=$(date +%Y%m%d-%H%M%S)
+    mv /etc/network/interfaces /etc/network/interfaces.bak-$timestamp
+    mv /tmp/new_interfaces /etc/network/interfaces
+    green "Network configuration applied. Restart networking with: 'systemctl restart networking'"
+}
+
+# Execute steps
+collect_network_info
+confirm_config
+generate_additional_routes
+generate_interface_content
+add_additional_bridges
+apply_config # Print file contents as-is
+-------------------------------
+
+
+./scripts/kubernetes/setup-talos.sh # Print the file path
+-------------------------------
+#!/bin/bash
+
+# Default configuration values
+VM_ID=300
+PROXMOX_NODE="pve"        # Default Proxmox node name
+DISK_SIZE="32G"
+MEMORY="16384"            # 16 GB RAM
+CPU="8"
+STORAGE_POOL="local"      # Default storage pool
+BRIDGE="vmbr1"            # Default network bridge
+
+# URLs for Talos
+TALOS_VERSION="v1.8.2"
+TALOS_ISO_URL="https://github.com/siderolabs/talos/releases/download/${TALOS_VERSION}/metal-amd64.iso"
+TALOS_ISO_NAME="talos-${TALOS_VERSION}-amd64.iso"
+
+# Colored echo functions
+red() { echo -e "[31m$1[0m"; }
+green() { echo -e "[32m$1[0m"; }
+blue() { echo -e "[34m$1[0m"; }
+cyan() { echo -e "[36m$1[0m"; }
+
+# Function to prompt for user inputs with defaults
+function prompt_for_inputs {
+    cyan "Prompting for configuration values..."
+
+    read -p "Enter Proxmox VM ID (default: $VM_ID): " input_vm_id
+    VM_ID="${input_vm_id:-$VM_ID}"
+
+    read -p "Enter Proxmox Node (default: $PROXMOX_NODE): " input_node
+    PROXMOX_NODE="${input_node:-$PROXMOX_NODE}"
+
+    read -p "Enter Disk Size (default: $DISK_SIZE): " input_disk_size
+    DISK_SIZE="${input_disk_size:-$DISK_SIZE}"
+
+    read -p "Enter Memory in MB (default: $MEMORY): " input_memory
+    MEMORY="${input_memory:-$MEMORY}"
+
+    read -p "Enter CPU Cores (default: $CPU): " input_cpu
+    CPU="${input_cpu:-$CPU}"
+
+    read -p "Enter Storage Pool (default: $STORAGE_POOL): " input_storage_pool
+    STORAGE_POOL="${input_storage_pool:-$STORAGE_POOL}"
+
+    read -p "Enter Network Bridge (default: $BRIDGE): " input_bridge
+    BRIDGE="${input_bridge:-$BRIDGE}"
+}
+
+# Function to download Talos ISO if not already present
+function download_talos_iso {
+    blue "Checking for Talos ISO in Proxmox storage pool..."
+    if pvesm list "$STORAGE_POOL" | grep -q "$TALOS_ISO_NAME"; then
+        green "Talos ISO already exists in $STORAGE_POOL. Skipping download."
+    else
+        blue "Downloading Talos ISO from official source..."
+        wget -q --show-progress -O "/var/lib/vz/template/iso/$TALOS_ISO_NAME" "$TALOS_ISO_URL"
+        green "Download completed."
+    fi
+}
+
+# Function to create the Proxmox VM for Talos
+function create_proxmox_vm {
+    blue "Creating Proxmox VM with Talos ISO attached..."
+
+    qm create "$VM_ID" --name talos --memory "$MEMORY" --cores "$CPU" --net0 virtio,bridge="$BRIDGE" --cdrom "$STORAGE_POOL:iso/$TALOS_ISO_NAME" --scsihw virtio-scsi-pci --scsi0 "$STORAGE_POOL:$DISK_SIZE"
+
+    green "VM $VM_ID created with Talos ISO attached. Adjust VM hardware as needed."
+}
+
+# Function to set up and install Talos
+function configure_talos {
+    blue "Configuring Talos for Kubernetes setup..."
+
+    # Set CPU type if required for newer PVE versions
+    qm set "$VM_ID" --cpu cputype=x86-64-v2
+
+    # Set Qemu Agent and SCSI single controller
+    qm set "$VM_ID" --agent 1 --scsihw virtio-scsi-single
+
+    # Create and apply Talos configuration
+    blue "Generating Talos configuration..."
+    talosctl gen secrets
+    talosctl gen config demo-cluster "https://10.0.10.10:6443" --output rendered/
+
+    green "Talos configuration files created. Apply the configuration to nodes after booting the VM."
+}
+
+# Function to print next steps for the user
+function display_next_steps {
+    cyan "Next steps:"
+    echo "1. Start the VM in Proxmox and open its console."
+    echo "2. Boot into Talos and observe the setup process."
+    echo "3. Once the VM is up, apply the configuration using talosctl commands."
+    echo "4. Regularly back up etcd for disaster recovery."
+    echo "5. Configure and test your Kubernetes cluster as required."
+
+    green "Script complete. Talos is ready to manage your Kubernetes applications."
+}
+
+# Main function to execute the setup steps
+function main {
+    prompt_for_inputs
+    download_talos_iso
+    create_proxmox_vm
+    configure_talos
+    display_next_steps
+}
+
+# Run the script
+main # Print file contents as-is
+-------------------------------
+
+
+./terraform/outputs.tf # Print the file path
+-------------------------------
+# Capture control plane IPs
+output "control_plane_ips" {
+  value = [for vm in module.kubernetes_vms.control_plane : vm.ip_address]
+}
+
+# Capture worker IPs
+output "worker_ips" {
+  value = [for vm in module.kubernetes_vms.worker : vm.ip_address]
+} # Print file contents as-is
+-------------------------------
+
+
+./terraform/main.tf # Print the file path
+-------------------------------
+# main.tf
+terraform {
+  required_providers {
+    proxmox = {
+      source  = "telmate/proxmox"
+      version = "2.9.14"
+    }
+  }
+}
+
+provider "proxmox" {
+  pm_api_url          = "https://${var.proxmox_server_ip}:8006/api2/json"
+  pm_api_token_id     = var.proxmox_token_id
+  pm_api_token_secret = var.proxmox_token_secret
+  pm_tls_insecure     = true
+}
+
+# Importing network/base VMs (PfSense, Fedora, etc.)
+module "network_vms" {
+  source       = "./modules/network"
+  vm_id_min    = 100
+  vm_id_max    = 199
+  additional_mac_address = var.additional_mac_address
+  storage_pool = var.storage_pool
+  target_node  = var.target_node
+}
+
+# Importing service VMs (Mattermost, GitLab, etc.)
+module "service_vms" {
+  source       = "./modules/service"
+  vm_id_min    = 200
+  vm_id_max    = 299
+  storage_pool = var.storage_pool
+  target_node  = var.target_node
+}
+
+# Importing Kubernetes VMs (Talos Control and Worker Nodes)
+module "kubernetes_vms" {
+  source         = "./modules/kubernetes"
+  vm_id_min      = 300
+  vm_id_max      = 399
+  storage_pool   = var.storage_pool
+  target_node    = var.target_node
+  control_count  = 3
+  worker_count   = 3
+}
+
+# Importing database VMs (PostgreSQL, MongoDB, etc.)
+module "database_vms" {
+  source       = "./modules/database"
+  vm_id_min    = 400
+  vm_id_max    = 499
+  storage_pool = var.storage_pool
+  target_node  = var.target_node
+} # Print file contents as-is
+-------------------------------
+
+
+./terraform/modules/database/main.tf # Print the file path
+-------------------------------
+# modules/database/main.tf
+variable "vm_id_min" { type = number }
+variable "vm_id_max" { type = number }
+variable "storage_pool" { type = string }
+variable "target_node" { type = string }
+
+# Define PostgreSQL VM
+resource "proxmox_lxc" "postgresql" {
+  vmid       = var.vm_id_min
+  hostname   = "postgresql"
+  ostemplate = "${var.storage_pool}:vztmpl/debian-12-turnkey-postgresql_18.1-1_amd64.tar.gz"
+  target_node = var.target_node
+  cores      = 2
+  memory     = 4096
+  rootfs     = "${var.storage_pool}:96G"
+  network {
+    name   = "eth0"
+    bridge = "vmbr1"
+    ip     = "dhcp"
+  }
+} # Print file contents as-is
+-------------------------------
+
+
+./terraform/modules/network/main.tf # Print the file path
+-------------------------------
+# modules/network/main.tf
+
+variable "vm_id_min" { type = number }
+variable "vm_id_max" { type = number }
+variable "storage_pool" { type = string }
+variable "target_node" { type = string }
+variable "additional_mac_address" { type = string }
+
+# Define PfSense VM
+resource "proxmox_vm_qemu" "pfsense" {
+  vmid         = var.vm_id_min
+  name         = "pfsense"
+  memory       = 2048
+  cores        = 2
+  target_node  = var.target_node
+
+  # Disk configuration
+  disk {
+    size    = "32G"
+    storage = var.storage_pool
+  }
+
+  # Attach the PfSense ISO image
+  cdrom {
+    file    = "${var.storage_pool}:iso/netgate-installer-amd64.iso"
+  }
+
+  # Network interfaces
+  network {
+    model  = "e1000"
+    bridge = "vmbr0"
+    mac    = var.additional_mac_address  # MAC address variable for vmbr0
+    firewall = true
+  }
+
+  network {
+    model  = "e1000"
+    bridge = "vmbr1"  # MAC will be generated automatically
+    firewall = true
+  }
+}
+
+# Define Fedora VM
+resource "proxmox_vm_qemu" "fedora" {
+  vmid         = var.vm_id_min + 1
+  name         = "fedora"
+  memory       = 4096
+  cores        = 2
+  target_node  = var.target_node
+
+  # Disk configuration
+  disk {
+    size    = "32G"
+    storage = var.storage_pool
+  }
+
+  # Attach the Fedora ISO image
+  cdrom {
+    file    = "${var.storage_pool}:iso/Fedora-Workstation-Live-x86_64-40-1.14.iso"
+  }
+
+  # Network interface
+  network {
+    model  = "virtio"
+    bridge = "vmbr1"  # MAC will be generated automatically
+    firewall = true
+  }
+} # Print file contents as-is
+-------------------------------
+
+
+./terraform/modules/service/main.tf # Print the file path
+-------------------------------
+# modules/service/main.tf
+variable "vm_id_min" { type = number }
+variable "vm_id_max" { type = number }
+variable "storage_pool" { type = string }
+variable "target_node" { type = string }
+
+# Define Mattermost VM
+resource "proxmox_lxc" "mattermost" {
+  vmid       = var.vm_id_min
+  hostname   = "mattermost"
+  ostemplate = "${var.storage_pool}:vztmpl/debian-12-turnkey-mattermost_18.0-1_amd64.tar.gz"
+  target_node = var.target_node
+  cores      = 2
+  memory     = 4096
+  rootfs     = "${var.storage_pool}:16G"
+  network {
+    name   = "eth0"
+    bridge = "vmbr1"
+    ip     = "dhcp"
+  }
+} # Print file contents as-is
+-------------------------------
+
+
+./terraform/modules/kubernetes/main.tf # Print the file path
+-------------------------------
+# modules/kubernetes/main.tf
+variable "vm_id_min" { type = number }
+variable "vm_id_max" { type = number }
+variable "storage_pool" { type = string }
+variable "target_node" { type = string }
+variable "control_count" { type = number }
+variable "worker_count" { type = number }
+
+# Define Kubernetes Control Plane Nodes
+resource "proxmox_vm_qemu" "k8s_control_plane" {
+  count        = var.control_count
+  vmid         = var.vm_id_min + count.index
+  name         = "k8s-control-plane-${count.index}"
+  memory       = 2048
+  cores        = 2
+  target_node  = var.target_node
+  network {
+    bridge = "vmbr1"
+  }
+  disk {
+    size    = "32G"
+    storage = var.storage_pool
+  }
+}
+
+# Define Kubernetes Worker Nodes
+resource "proxmox_vm_qemu" "k8s_worker" {
+  count        = var.worker_count
+  vmid         = var.vm_id_min + var.control_count + count.index
+  name         = "k8s-worker-${count.index}"
+  memory       = 2048
+  cores        = 4
+  target_node  = var.target_node
+  network {
+    bridge = "vmbr1"
+  }
+  disk {
+    size    = "32"
+    storage = var.storage_pool
+  }
+} # Print file contents as-is
+-------------------------------
+
+
+./terraform/vars.tf # Print the file path
+-------------------------------
+# vars.tf
+variable "proxmox_server_ip" {
+  description = "Proxmox server IP address"
+  type        = string
+}
+
+variable "proxmox_token_id" {
+  description = "Proxmox API token ID"
+  type        = string
+}
+
+variable "proxmox_token_secret" {
+  description = "Proxmox API token secret"
+  type        = string
+}
+
+variable "additional_mac_address" {
+  description = "MAC address for the additional IP on Hetzner's network"
+  type        = string
+}
+
+variable "storage_pool" {
+  description = "Default storage pool for VMs"
+  type        = string
+  default     = "local"
+}
+
+variable "target_node" {
+  description = "Target Proxmox node for VM deployment"
+  type        = string
+  default     = "pve"
+} # Print file contents as-is
+-------------------------------
+
+
+./content.txt # Print the file path
+------------------------------- # Print file contents as-is
+-------------------------------
+
+
+./README.md # Print the file path
+-------------------------------
+# gitlab-proxmox
+
+InfraOps Guide for Gitlab CI/CD Setup with Hetzner + CloudFlare + Proxmox + PfSense + HaProxy
+
+```bash
+chmod -R +x ./
+``` # Print file contents as-is
+-------------------------------
+
+
+./scripts/terraform/setup-terraform.sh # Print the file path
+-------------------------------
+#!/bin/bash
+
+# Color output functions
+red() { echo -e "[31m$1[0m"; }
+green() { echo -e "[32m$1[0m"; }
+blue() { echo -e "[34m$1[0m"; }
+cyan() { echo -e "[36m$1[0m"; }
+
+# Function to provide Proxmox user setup instructions
+setup_proxmox_user_instructions() {
+  cyan "=================================================="
+  cyan "Setting up the necessary user and API token for Terraform in Proxmox"
+  cyan "Follow these steps carefully to ensure Terraform can access Proxmox via API:"
+  cyan ""
+  cyan "1. Create a new user in Proxmox for Terraform"
+  cyan "   Go to: Datacenter > Permissions > Users > Add"
+  cyan "   Set the following values:"
+  cyan "     - User name: terraform-user"
+  cyan "     - Realm: pam (Linux PAM standard authentication)"
+  cyan "     - Expire: never"
+  cyan "     - Enabled: Yes"
+  cyan "   Then click 'Add' to create the user."
+  cyan ""
+  cyan "2. Assign permissions to 'terraform-user'"
+  cyan "   Go to: Datacenter > Permissions > Add"
+  cyan "   Set the following values:"
+  cyan "     - Path: '/' (This grants permissions at the root level)"
+  cyan "     - User: terraform-user@pam"
+  cyan "     - Role: PVEVMAdmin"
+  cyan "   Then click 'Add' to save."
+  cyan ""
+  cyan "3. Generate an API token for 'terraform-user'"
+  cyan "   Go to: Datacenter > Permissions > API Tokens > Add"
+  cyan "   Set the following values:"
+  cyan "     - User: terraform-user@pam"
+  cyan "     - Token ID: terraform-token"
+  cyan "     - Privilege Separation: Uncheck"
+  cyan "     - Expire: never"
+  cyan "   After clicking 'Add', save the generated token. This token will only be visible once, so be sure to copy it!"
+  cyan "=================================================="
+  cyan ""
+}
+
+# Function to prompt for Proxmox details
+prompt_proxmox_details() {
+  read -p "Enter Proxmox Server IP: " PROXMOX_SERVER_IP
+  read -p "Enter Proxmox Token ID (default: terraform-user@pam!terraform-token): " PROXMOX_TOKEN_ID
+  PROXMOX_TOKEN_ID=${PROXMOX_TOKEN_ID:-"terraform-user@pam!terraform-token"}
+  read -p "Enter Proxmox Token Secret: " PROXMOX_TOKEN_SECRET
+  read -p "Enter Proxmox Node (default: pve-01): " PROXMOX_NODE
+  PROXMOX_NODE=${PROXMOX_NODE:-"pve-01"}
+  read -p "Enter the Proxmox Storage Pool (default: local): " STORAGE_POOL
+  STORAGE_POOL=${STORAGE_POOL:-"local"}
+
+  export TF_VAR_proxmox_token_id="$PROXMOX_TOKEN_ID"
+  export TF_VAR_proxmox_token_secret="$PROXMOX_TOKEN_SECRET"
+}
+
+# Function to check or generate SSH key
+generate_ssh_key() {
+  if [[ ! -f ~/.ssh/id_rsa ]]; then
+    blue "Generating SSH key..."
+    ssh-keygen -t rsa -b 2048 -f ~/.ssh/id_rsa -N ""
+    green "SSH key generated at ~/.ssh/id_rsa"
+  else
+    green "SSH key already exists at ~/.ssh/id_rsa"
+  fi
+}
+
+# Function to create Terraform configuration directory and vars.tf
+create_terraform_configuration() {
+  blue "Creating Terraform configuration under ./terraform/ directory..."
+  mkdir -p terraform
+  cd terraform
+
+  cat > vars.tf <<EOL
+variable "pve_server_ip" {
+  description = "Server IP for PVE cluster"
+  type        = string
+  default     = "$PROXMOX_SERVER_IP"
+}
+
+variable "target_node" {
+  description = "Proxmox VE node to target"
+  type        = string
+  default     = "$PROXMOX_NODE"
+}
+
+variable "storage_pool" {
+  description = "Storage pool in Proxmox VE for container storage"
+  type        = string
+  default     = "$STORAGE_POOL"
+}
+
+variable "lxc_containers" {
+  type = map(object({
+    vm_id    = number,
+    template = string
+  }))
+}
+EOL
+}
+
+# Function to initialize Terraform
+initialize_terraform() {
+  blue "Initializing Terraform configuration..."
+  terraform init
+  green "Terraform setup is complete! Details have been saved in the ./terraform/ directory."
+  green "Run 'terraform apply' to create your LXC containers based on the configuration."
+}
+
+# Main script execution
+setup_proxmox_user_instructions
+prompt_proxmox_details
+generate_ssh_key
+create_terraform_configuration
+initialize_terraform # Print file contents as-is
+-------------------------------
+
+
+./scripts/talos/setup-talos.sh # Print the file path
+-------------------------------
+#!/bin/bash
+
+# Color functions for output
+green() { echo -e "[32m$1[0m"; }
+blue() { echo -e "[34m$1[0m"; }
+red() { echo -e "[31m$1[0m"; }
+
+# Fetch dynamically assigned IPs directly from Terraform output
+fetch_ips() {
+    blue "Fetching dynamically assigned IPs from Terraform output..."
+    
+    CONTROL_PLANE_IPS=$(terraform output -json control_plane_ips | jq -r '.[]')
+    WORKER_IPS=$(terraform output -json worker_ips | jq -r '.[]')
+
+    if [ -z "$CONTROL_PLANE_IPS" ] || [ -z "$WORKER_IPS" ]; then
+        red "Failed to retrieve IPs from Terraform output. Ensure Terraform has applied the resources."
+        exit 1
+    fi
+
+    green "Control Plane IPs: $CONTROL_PLANE_IPS"
+    green "Worker Node IPs: $WORKER_IPS"
+}
+
+# Generate Talos secrets and configurations using dynamically assigned IPs
+generate_and_apply_talos_config() {
+    blue "Generating Talos secrets and configurations..."
+    
+    talosctl gen secrets -o talos-secrets.yaml
+    talosctl gen config demo-cluster https://"${CONTROL_PLANE_IPS%% *}":6443 --output config --with-secrets talos-secrets.yaml
+
+    # Apply configuration to each control plane node
+    for ip in $CONTROL_PLANE_IPS; do
+        blue "Applying Talos configuration to control plane node: $ip"
+        talosctl apply-config --insecure --nodes "$ip" --file config/controlplane.yaml || {
+            red "Failed to apply config to control plane node $ip."
+            exit 1
+        }
+    done
+
+    # Apply configuration to each worker node
+    for ip in $WORKER_IPS; do
+        blue "Applying Talos configuration to worker node: $ip"
+        talosctl apply-config --insecure --nodes "$ip" --file config/worker.yaml || {
+            red "Failed to apply config to worker node $ip."
+            exit 1
+        }
+    done
+
+    green "Talos configuration applied successfully to all nodes."
+}
+
+# Main function
+main() {
+    fetch_ips
+    generate_and_apply_talos_config
+}
+
+# Run the main function
+main # Print file contents as-is
+-------------------------------
+
+
+./scripts/setup/install-tools.sh # Print the file path
+-------------------------------
+#!/bin/bash
+
+# Colored output functions
+red() { echo -e "[31m$1[0m"; }
+green() { echo -e "[32m$1[0m"; }
+blue() { echo -e "[34m$1[0m"; }
+cyan() { echo -e "[36m$1[0m"; }
+
+# Function to update and install prerequisites
+function install_prerequisites {
+    blue "Updating and installing prerequisites..."
+    sudo apt update
+    sudo apt install -y gnupg software-properties-common curl wget
+    green "Prerequisites installed."
+}
+
+# Function to install Packer
+function install_packer {
+    blue "Installing Packer..."
+    wget -O- https://apt.releases.hashicorp.com/gpg | sudo gpg --dearmor -o /usr/share/keyrings/hashicorp-archive-keyring.gpg
+    echo "deb [signed-by=/usr/share/keyrings/hashicorp-archive-keyring.gpg] https://apt.releases.hashicorp.com $(lsb_release -cs) main" | sudo tee /etc/apt/sources.list.d/hashicorp.list
+    sudo apt update && sudo apt install -y packer
+    packer -v && green "Packer installed."
+}
+
+# Function to install Terraform
+function install_terraform {
+    blue "Installing Terraform..."
+    wget -O- https://apt.releases.hashicorp.com/gpg | sudo gpg --dearmor -o /usr/share/keyrings/hashicorp-archive-keyring.gpg
+    echo "deb [signed-by=/usr/share/keyrings/hashicorp-archive-keyring.gpg] https://apt.releases.hashicorp.com $(lsb_release -cs) main" | sudo tee /etc/apt/sources.list.d/hashicorp.list
+    sudo apt update && sudo apt install -y terraform
+    terraform -v && green "Terraform installed."
+}
+
+# Function to install Talosctl
+function install_talosctl {
+    blue "Installing Talosctl..."
+    curl -sL https://talos.dev/install | sh
+    talosctl version --help && green "Talosctl installed."
+}
+
+# Function to install Talhelper
+function install_talhelper {
+    blue "Installing Talhelper..."
+    curl https://i.jpillora.com/budimanjojo/talhelper! | sudo bash
+    talhelper -v && green "Talhelper installed."
+}
+
+# Function to install Kubectl
+function install_kubectl {
+    blue "Installing Kubectl..."
+    curl -LO "https://dl.k8s.io/release/$(curl -L -s https://dl.k8s.io/release/stable.txt)/bin/linux/amd64/kubectl"
+    sudo install -o root -g root -m 0755 kubectl /usr/local/bin/kubectl
+    kubectl version --client && green "Kubectl installed."
+}
+
+# Function to install Sops
+function install_sops {
+    blue "Installing Sops..."
+    curl -LO https://github.com/getsops/sops/releases/download/v3.8.1/sops-v3.8.1.linux.amd64
+    sudo mv sops-v3.8.1.linux.amd64 /usr/local/bin/sops
+    sudo chmod +x /usr/local/bin/sops
+    sops -v && green "Sops installed."
+}
+
+# Function to install Age
+function install_age {
+    blue "Installing Age..."
+    sudo apt install -y age
+    age -version && green "Age installed."
+}
+
+# Function to install Cilium CLI
+function install_cilium_cli {
+    blue "Installing Cilium CLI..."
+    CILIUM_CLI_VERSION=$(curl -s https://raw.githubusercontent.com/cilium/cilium-cli/main/stable.txt)
+    CLI_ARCH=amd64
+    if [ "$(uname -m)" = "aarch64" ]; then CLI_ARCH=arm64; fi
+    curl -L --fail --remote-name-all https://github.com/cilium/cilium-cli/releases/download/${CILIUM_CLI_VERSION}/cilium-linux-${CLI_ARCH}.tar.gz{,.sha256sum}
+    sha256sum --check cilium-linux-${CLI_ARCH}.tar.gz.sha256sum
+    sudo tar xzvfC cilium-linux-${CLI_ARCH}.tar.gz /usr/local/bin
+    rm cilium-linux-${CLI_ARCH}.tar.gz{,.sha256sum}
+    green "Cilium CLI installed."
+}
+
+# Main installation process
+cyan "Starting tool installation..."
+
+install_prerequisites
+install_packer
+install_terraform
+install_talosctl
+install_talhelper
+install_kubectl
+install_sops
+install_age
+install_cilium_cli
+
+green "All tools have been successfully installed." # Print file contents as-is
+-------------------------------
+
+
+./scripts/setup/setup-network.sh # Print the file path
 -------------------------------
 #!/bin/bash
 
