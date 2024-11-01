@@ -13,14 +13,24 @@ install_prerequisites() {
     green "Prerequisites installed."
 }
 
+# Install Docker
+install_docker() {
+    blue "Installing Docker..."
+    sudo apt install -y docker.io
+    sudo systemctl enable --now docker
+    sudo usermod -aG docker $USER
+    docker --version
+    green "Docker installed."
+}
+
 # Install Packer
 install_packer() {
     blue "Installing Packer..."
     wget -O- https://apt.releases.hashicorp.com/gpg | sudo gpg --dearmor -o /usr/share/keyrings/hashicorp-archive-keyring.gpg
     echo "deb [signed-by=/usr/share/keyrings/hashicorp-archive-keyring.gpg] https://apt.releases.hashicorp.com $(lsb_release -cs) main" | sudo tee /etc/apt/sources.list.d/hashicorp.list
-    sudo apt update && sudo apt install packer
+    sudo apt install packer
     packer -v
-    green "Docker installed."
+    green "Packer installed."
 }
 
 # Install Terraform
@@ -32,7 +42,6 @@ install_terraform() {
     echo "deb [signed-by=/usr/share/keyrings/hashicorp-archive-keyring.gpg] \
     https://apt.releases.hashicorp.com $(lsb_release -cs) main" | \
     sudo tee /etc/apt/sources.list.d/hashicorp.list
-    sudo apt update
     sudo apt install terraform
     terraform -v
     green "Terraform installed."
@@ -42,7 +51,7 @@ install_terraform() {
 install_talosctl() {
     blue "Installing Talosctl..."
     curl -sL https://talos.dev/install | sh
-    talosctl version --help
+    talosctl version
     green "Talosctl installed."
 }
 
@@ -106,6 +115,7 @@ install_monitoring_tools() {
 # Main function
 main() {
     install_prerequisites
+    install_docker
     install_packer
     install_terraform
     install_talosctl
