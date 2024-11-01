@@ -19,3 +19,13 @@ output "worker_ips" {
 output "worker_macs" {
   value = [for vm in module.kubernetes_vms.compute_worker : vm.mac_addrs]
 }
+
+# Talos Version Output
+output "talos_version" {
+  value = var.talos_version
+}
+
+# Talos Image ID Output
+output "talos_disk_image_id"{
+  value = var.talos_disk_image_id
+}
