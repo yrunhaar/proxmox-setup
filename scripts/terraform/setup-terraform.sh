@@ -100,9 +100,9 @@ prompt_template_and_image_details() {
 # Function to create packer configuration file
 create_packer_configuration() {
   mkdir -p $PACKER_DIR/talos-packer/vars
-  blue "Creating Packer local.pkvars.hcl configuration..."
+  blue "Creating Packer local.pkrvars.hcl configuration..."
 
-  cat > $PACKER_DIR/talos-packer/vars/local.pkvars.hcl <<EOL
+  cat > $PACKER_DIR/talos-packer/vars/local.pkrvars.hcl <<EOL
 proxmox_api_url       = "https://$PROXMOX_SERVER_IP:8006/api2/json"
 proxmox_node          = "$PROXMOX_NODE"
 proxmox_api_token_id  = "$PROXMOX_TOKEN_ID"
@@ -113,7 +113,7 @@ base_iso_file         = "local:iso/$BASE_ISO_FILE"
 talos_version         = "$TALOS_VERSION"
 talos_disk_image_id      = "$TALOS_DISK_IMAGE_ID"
 EOL
-  green "Packer local.pkvars.hcl created."
+  green "Packer local.pkrvars.hcl created."
 }
 
 # Function to create Terraform credentials file
