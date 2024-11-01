@@ -34,7 +34,7 @@ source "proxmox-iso" "talos" {
   }
 
   memory               = 2048
-  vm_id                = "9700"
+  vm_id                = "9300"
   cores                = var.cores
   cpu_type             = var.cpu_type
   sockets              = "1"
