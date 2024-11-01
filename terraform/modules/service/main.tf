@@ -3,6 +3,7 @@ variable "vm_id_min" { type = number }
 variable "vm_id_max" { type = number }
 variable "storage_pool" { type = string }
 variable "target_node" { type = string }
+variable "mattermost_ct_template" { type = string }
 
 # Define Mattermost VM
 resource "proxmox_lxc" "mattermost" {

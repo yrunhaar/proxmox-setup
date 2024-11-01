@@ -16,15 +16,6 @@ provider "proxmox" {
   pm_tls_insecure     = true
 }
 
-# Importing network/base VMs other then PfSense (Fedora, Ubuntu Server)
-# module "network_vms" {
-#   source       = "./modules/network"
-#   vm_id_min    = 101
-#   vm_id_max    = 199
-#   storage_pool = var.storage_pool
-#   target_node  = var.target_node
-# }
-
 # Importing service VMs (Mattermost, GitLab, etc.)
 module "service_vms" {
   source       = "./modules/service"
@@ -32,6 +23,7 @@ module "service_vms" {
   vm_id_max    = 299
   storage_pool = var.storage_pool
   target_node  = var.target_node
+  mattermost_ct_template = var.mattermost_ct_template
 }
 
 # Importing Kubernetes VMs (Talos Control and Worker Nodes)
@@ -51,4 +43,5 @@ module "database_vms" {
   vm_id_max    = 499
   storage_pool = var.storage_pool
   target_node  = var.target_node
+  postgresql_ct_template = var.postgresql_ct_template
 }

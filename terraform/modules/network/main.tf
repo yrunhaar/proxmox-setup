@@ -4,6 +4,7 @@ variable "vm_id_min" { type = number }
 variable "vm_id_max" { type = number }
 variable "storage_pool" { type = string }
 variable "target_node" { type = string }
+variable "fedora_iso_template" { type = string }
 
 # Define Fedora VM
 resource "proxmox_vm_qemu" "fedora" {
