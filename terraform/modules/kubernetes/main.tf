@@ -3,39 +3,18 @@ variable "vm_id_min" { type = number }
 variable "vm_id_max" { type = number }
 variable "storage_pool" { type = string }
 variable "target_node" { type = string }
-variable "control_count" { type = number }
-variable "worker_count" { type = number }
+variable "talos_version" { type = string }
 
-# Define Kubernetes Control Plane Nodes
-resource "proxmox_vm_qemu" "k8s_control_plane" {
-  count        = var.control_count
-  vmid         = var.vm_id_min + count.index
-  name         = "k8s-control-plane-${count.index}"
-  memory       = 2048
-  cores        = 2
-  target_node  = var.target_node
-  network {
-    bridge = "vmbr1"
-  }
-  disk {
-    size    = "32G"
-    storage = var.storage_pool
-  }
+# Dynamically create VMs.
+module "compute_master" {
+  source                   = "./compute-master"
+  target_node              = var.target_node
+  storage_pool             = var.storage_pool
+  nodes                    = local.vm_master_nodes
 }
-
-# Define Kubernetes Worker Nodes
-resource "proxmox_vm_qemu" "k8s_worker" {
-  count        = var.worker_count
-  vmid         = var.vm_id_min + var.control_count + count.index
-  name         = "k8s-worker-${count.index}"
-  memory       = 2048
-  cores        = 4
-  target_node  = var.target_node
-  network {
-    bridge = "vmbr1"
-  }
-  disk {
-    size    = "32"
-    storage = var.storage_pool
-  }
+module "compute_worker" {
+  source                   = "./compute-worker"
+  target_node              = var.target_node
+  storage_pool             = var.storage_pool
+  nodes                    = local.vm_worker_nodes
 }

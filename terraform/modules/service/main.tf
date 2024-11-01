@@ -8,7 +8,7 @@ variable "target_node" { type = string }
 resource "proxmox_lxc" "mattermost" {
   vmid       = var.vm_id_min
   hostname   = "mattermost"
-  ostemplate = "${var.storage_pool}:vztmpl/debian-12-turnkey-mattermost_18.0-1_amd64.tar.gz"
+  ostemplate = "${var.storage_pool}:vztmpl/{var.mattermost_ct_template}"
   target_node = var.target_node
   cores      = 2
   memory     = 4096

@@ -1,29 +1,29 @@
 # main.tf
 terraform {
-  required_providers {
-    proxmox = {
-      source  = "telmate/proxmox"
-      version = "2.9.14"
+    required_version = ">= 0.13.0"
+    required_providers {
+        proxmox = {
+            source = "telmate/proxmox"
+            version = "3.0.1-rc1"
+        }
     }
-  }
 }
 
 provider "proxmox" {
-  pm_api_url          = "https://${var.proxmox_server_ip}:8006/api2/json"
-  pm_api_token_id     = var.proxmox_token_id
-  pm_api_token_secret = var.proxmox_token_secret
+  pm_api_url          = var.proxmox_api_url
+  pm_api_token_id     = var.proxmox_api_token_id
+  pm_api_token_secret = var.proxmox_api_token_secret
   pm_tls_insecure     = true
 }
 
-# Importing network/base VMs (PfSense, Fedora, etc.)
-module "network_vms" {
-  source       = "./modules/network"
-  vm_id_min    = 100
-  vm_id_max    = 199
-  additional_mac_address = var.additional_mac_address
-  storage_pool = var.storage_pool
-  target_node  = var.target_node
-}
+# Importing network/base VMs other then PfSense (Fedora, Ubuntu Server)
+# module "network_vms" {
+#   source       = "./modules/network"
+#   vm_id_min    = 101
+#   vm_id_max    = 199
+#   storage_pool = var.storage_pool
+#   target_node  = var.target_node
+# }
 
 # Importing service VMs (Mattermost, GitLab, etc.)
 module "service_vms" {
@@ -39,10 +39,9 @@ module "kubernetes_vms" {
   source         = "./modules/kubernetes"
   vm_id_min      = 300
   vm_id_max      = 399
+  talos_version = var.talos_version
   storage_pool   = var.storage_pool
   target_node    = var.target_node
-  control_count  = 3
-  worker_count   = 3
 }
 
 # Importing database VMs (PostgreSQL, MongoDB, etc.)

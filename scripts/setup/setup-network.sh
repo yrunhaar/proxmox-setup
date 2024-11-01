@@ -138,10 +138,15 @@ apply_config() {
     green "Network configuration applied. Restart networking with: 'systemctl restart networking'"
 }
 
-# Execute steps
-collect_network_info
-confirm_config
-generate_additional_routes
-generate_interface_content
-add_additional_bridges
-apply_config
+# Main function
+main() {
+    collect_network_info
+    confirm_config
+    generate_additional_routes
+    generate_interface_content
+    add_additional_bridges
+    apply_config
+}
+
+# Call the main function
+main

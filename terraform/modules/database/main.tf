@@ -8,7 +8,7 @@ variable "target_node" { type = string }
 resource "proxmox_lxc" "postgresql" {
   vmid       = var.vm_id_min
   hostname   = "postgresql"
-  ostemplate = "${var.storage_pool}:vztmpl/debian-12-turnkey-postgresql_18.1-1_amd64.tar.gz"
+  ostemplate = "${var.storage_pool}:vztmpl/{var.postgresql_ct_template}"
   target_node = var.target_node
   cores      = 2
   memory     = 4096
