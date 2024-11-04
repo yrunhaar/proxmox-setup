@@ -12,7 +12,7 @@ terraform {
   }
 }
 
-resource "proxmox_vm_qemu" "c0depool-talos" {
+resource "proxmox_vm_qemu" "kubernetes_talos" {
 
     # Dynamic provisioning of multiple nodes
     count = length(var.nodes)
@@ -76,5 +76,9 @@ resource "proxmox_vm_qemu" "c0depool-talos" {
 }
 
 output "mac_addrs" {
-    value = [for value in proxmox_vm_qemu.c0depool-talos : lower(tostring(value.network[0].macaddr))]
+    value = [for value in proxmox_vm_qemu.kubernetes_talos : lower(tostring(value.network[0].macaddr))]
+}
+
+output "ip_addresses" {
+  value = [for vm in proxmox_vm_qemu.kubernetes_talos : vm.network[0].ip]
 }

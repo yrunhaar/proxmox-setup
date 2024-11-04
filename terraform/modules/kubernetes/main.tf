@@ -35,3 +35,19 @@ module "compute_worker" {
     proxmox = proxmox
   }
 }
+
+output "master_ips" {
+  value = module.compute_master.ip_addresses
+}
+
+output "master_macs" {
+  value = module.compute_master.mac_addrs
+}
+
+output "worker_ips" {
+  value = module.compute_worker.ip_addresses
+}
+
+output "worker_macs" {
+  value = module.compute_worker.mac_addrs
+}

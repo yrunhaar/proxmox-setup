@@ -22,7 +22,10 @@ resource "proxmox_lxc" "postgresql" {
   target_node = var.target_node
   cores      = 2
   memory     = 4096
-  rootfs     = "${var.storage_pool}:96G"
+  rootfs {
+    storage = var.storage_pool
+    size    = "96G"
+  }
   network {
     name   = "eth0"
     bridge = "vmbr1"
