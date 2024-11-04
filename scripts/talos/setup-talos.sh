@@ -16,14 +16,70 @@ KUBE_CONFIG_DIR="$HOME/.kube"
 KUBE_CONFIG_FILE="$KUBE_CONFIG_DIR/config"
 
 
+read -p "Enter Proxmox Server IP: " PROXMOX_SERVER_IP
+read -p "Enter Proxmox User (default: terraform-user): " PROXMOX_USER
+PROXMOX_USER=${PROXMOX_USER:-"terraform-user"}
+read -p "Enter Proxmox Password: " PROXMOX_PASSWORD
+
+# Proxmox API credentials
+PROXMOX_API_URL="https://${PROXMOX_SERVER_IP}:8006/api2/json"
+PROXMOX_REALM="pam"  # Adjust if using LDAP or other realm
+
 # Load values from Terraform outputs
-MASTER_IPS=($(terraform -chdir="$TERRAFORM_DIR" output -json master_ips | jq -r '.[]'))
-WORKER_IPS=($(terraform -chdir="$TERRAFORM_DIR" output -json worker_ips | jq -r '.[]'))
-MASTER_MACS=($(terraform -chdir="$TERRAFORM_DIR" output -json master_macs | jq -r '.[]'))
-WORKER_MACS=($(terraform -chdir="$TERRAFORM_DIR" output -json worker_macs | jq -r '.[]'))
+MASTER_VMIDS=($(terraform -chdir="$TERRAFORM_DIR" output -json master_vmids | jq -r '.[]'))
+MASTER_MACS=($(terraform -chdir="$TERRAFORM_DIR" output -json master_macaddrs | jq -r '.[]'))
+WORKER_VMIDS=($(terraform -chdir="$TERRAFORM_DIR" output -json worker_vmids | jq -r '.[]'))
+WORKER_MACS=($(terraform -chdir="$TERRAFORM_DIR" output -json worker_macaddrs | jq -r '.[]'))
 TALOS_VERSION=$(terraform -chdir="$TERRAFORM_DIR" output -json talos_version | jq -r '.')
 TALOS_DISK_IMAGE_ID=$(terraform -chdir="$TERRAFORM_DIR" output -json talos_disk_image_id | jq -r '.')
 
+# Function to fetch IP address based on MAC address using Proxmox API
+get_ip_from_mac() {
+    local mac_addr="$1"
+    local ip_address=""
+
+    # Query Proxmox API for VM network information
+    response=$(curl -s -k -u "$PROXMOX_USER@$PROXMOX_REALM:$PROXMOX_PASSWORD" \
+        "$PROXMOX_API_URL/nodes/your_node_name/qemu" | \
+        jq -r --arg mac "$mac_addr" '.data[] | select(.net0.mac == $mac) | .net0.ip')
+
+    # Check if response contains an IP
+    if [[ -n "$response" ]]; then
+        ip_address="$response"
+    else
+        red "Could not retrieve IP for MAC: $mac_addr"
+    fi
+
+    echo "$ip_address"
+}
+
+# Populate MASTER_IPS array
+blue "Fetching IPs for master nodes..."
+for mac in "${MASTER_MACS[@]}"; do
+    ip=$(get_ip_from_mac "$mac")
+    if [[ -n "$ip" ]]; then
+        MASTER_IPS+=("$ip")
+    fi
+done
+
+# Populate WORKER_IPS array
+blue "Fetching IPs for worker nodes..."
+for mac in "${WORKER_MACS[@]}"; do
+    ip=$(get_ip_from_mac "$mac")
+    if [[ -n "$ip" ]]; then
+        WORKER_IPS+=("$ip")
+    fi
+done
+
+blue "Loaded Terraform output variables:"
+cyan "Master VM IDs: ${MASTER_VMIDS[@]}"
+cyan "Master IPs: ${MASTER_IPS[@]}"
+cyan "Master MACs: ${MASTER_MACS[@]}"
+cyan "Worker VM IDs: ${WORKER_VMIDS[@]}"
+cyan "Worker IPs: ${WORKER_IPS[@]}"
+cyan "Worker MACs: ${WORKER_MACS[@]}"
+cyan "Talos Version: $TALOS_VERSION"
+cyan "Talos Disk Image ID: $TALOS_DISK_IMAGE_ID"
 
 # Step 1: Generate Talos YAML configuration for cluster setup
 generate_talos_yaml_config() {
