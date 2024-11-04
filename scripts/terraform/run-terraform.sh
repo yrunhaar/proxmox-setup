@@ -100,23 +100,31 @@ export_terraform_output() {
     MASTER_IPS=()
     for i in "${!MASTER_MACS[@]}"; do
         ip="$BASE_IP.$((LAST_OCTET + i))"
-        MASTER_IPS+=("\"$ip\"")
+        MASTER_IPS+=("$ip")
     done
 
     # Generate IPs for Worker VMs
     WORKER_IPS=()
     for i in "${!WORKER_MACS[@]}"; do
         ip="$BASE_IP.$((LAST_OCTET + ${#MASTER_MACS[@]} + i))"
-        WORKER_IPS+=("\"$ip\"")
+        WORKER_IPS+=("$ip")
     done
 
-    # Add IPs to the JSON file
-    jq --argjson master_ips "$(echo "[${MASTER_IPS[*]}]" | jq .)" \
-       --argjson worker_ips "$(echo "[${WORKER_IPS[*]}]" | jq .)" \
+    # Add IP addresses to JSON file in correct format
+    jq --argjson master_ips "$(printf '%s\n' "${MASTER_IPS[@]}" | jq -R . | jq -s .)" \
+       --argjson worker_ips "$(printf '%s\n' "${WORKER_IPS[@]}" | jq -R . | jq -s .)" \
        '. + {master_ips: $master_ips, worker_ips: $worker_ips}' "$OUTPUT_FILE" > /tmp/temp_output.json && mv /tmp/temp_output.json "$OUTPUT_FILE"
 
     green "IP addresses automatically assigned for all Master and Worker VMs."
-    green "Terraform output and IP addresses saved locally at $OUTPUT_FILE."
+    green "Combined Terraform output and IP addresses saved locally at $OUTPUT_FILE."
+
+    # Verify the content of the file before attempting to send it to VM
+    if [[ -s "$OUTPUT_FILE" ]]; then
+        green "Output file verified with IP addresses."
+    else
+        red "Output file is empty. Check the process for errors."
+        exit 1
+    fi
 
     # Check if VM_ID is provided and VM exists
     if [[ -n "$VM_ID" ]] && check_vm_exists "$VM_ID"; then
