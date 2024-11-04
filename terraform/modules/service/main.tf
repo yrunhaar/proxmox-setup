@@ -18,7 +18,7 @@ terraform {
 resource "proxmox_lxc" "mattermost" {
   vmid       = var.vm_id_min
   hostname   = "mattermost"
-  ostemplate = "${var.storage_pool}:vztmpl/{var.mattermost_ct_template}"
+  ostemplate = "${var.storage_pool}:vztmpl/${var.mattermost_ct_template}"
   target_node = var.target_node
   cores      = 2
   memory     = 4096
