@@ -79,14 +79,14 @@ prompt_for_ip_addresses() {
     green "IP addresses collected for all Master and Worker VMs."
 }
 
-# Function to export Terraform output
+# Function to export Terraform output and prompt for IPs
 export_terraform_output() {
     # Capture Terraform output in a local file
     terraform -chdir="$TERRAFORM_DIR" output -json > "$OUTPUT_FILE"
     green "Terraform output saved locally at $OUTPUT_FILE."
 
     # Prompt user for IP addresses for each master and worker VM
-    blue "Please enter the IP addresses for each master and worker VM by checking DHCP Leases in the pfSense GUI (Status --> DHCP Leases)."
+    blue "Please enter the IP addresses for each master and worker VM by checking DHCP Leases in the pfSense GUI."
 
     # Load MAC addresses from the JSON output
     MASTER_MACS=($(jq -r '.master_macaddrs.value[]' "$OUTPUT_FILE"))
@@ -106,9 +106,9 @@ export_terraform_output() {
         WORKER_IPS+=("\"$ip\"")
     done
 
-    # Update JSON file with IPs
-    jq --argjson master_ips "[${MASTER_IPS[*]}]" \
-       --argjson worker_ips "[${WORKER_IPS[*]}]" \
+    # Add IPs to the JSON file
+    jq --argjson master_ips "$(echo "[${MASTER_IPS[*]}]" | jq .)" \
+       --argjson worker_ips "$(echo "[${WORKER_IPS[*]}]" | jq .)" \
        '. + {master_ips: $master_ips, worker_ips: $worker_ips}' "$OUTPUT_FILE" > /tmp/temp_output.json && mv /tmp/temp_output.json "$OUTPUT_FILE"
 
     green "IP addresses collected for all Master and Worker VMs."
