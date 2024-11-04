@@ -49,7 +49,7 @@ build_terraform() {
     
     terraform -chdir="$TERRAFORM_DIR" init || { red "Terraform initialization failed"; exit 1; }
     terraform -chdir="$TERRAFORM_DIR" plan -var-file="credentials.auto.tfvars" -var-file="images.tfvars" -out="$TF_PLAN_FILE" || { red "Terraform plan failed"; exit 1; }
-    terraform -chdir="$TERRAFORM_DIR" apply -var-file="credentials.auto.tfvars" -var-file="images.tfvars" "$TF_PLAN_FILE" || { red "Terraform apply failed"; exit 1; }
+    terraform -chdir="$TERRAFORM_DIR" apply "$TF_PLAN_FILE" || { red "Terraform apply failed"; exit 1; }
     
     green "Terraform configuration applied successfully!"
 }
