@@ -9,7 +9,7 @@ blue() { echo -e "\033[34m$1\033[0m"; }
 install_prerequisites() {
     blue "Installing prerequisites..."
     sudo apt update
-    sudo apt install -y gnupg software-properties-common curl wget apt-transport-https ca-certificates lsb-release
+    sudo apt install -y gnupg software-properties-common curl wget apt-transport-https ca-certificates lsb-release jq
     green "Prerequisites installed."
 }
 

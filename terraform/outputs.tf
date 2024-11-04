@@ -1,3 +1,9 @@
+# Capture master node IPs
+output "master_vmids" {
+  value = module.kubernetes_vms.master_vmids
+}
+
+
 # Capture master node MAC addresses
 output "master_macaddrs" {
   value = module.kubernetes_vms.master_macaddrs
