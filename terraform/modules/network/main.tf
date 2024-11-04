@@ -6,6 +6,15 @@ variable "storage_pool" { type = string }
 variable "target_node" { type = string }
 variable "fedora_iso_template" { type = string }
 
+terraform {
+  required_providers {
+    proxmox = {
+      source = "telmate/proxmox"
+      version = "3.0.1-rc1"
+    }
+  }
+}
+
 # Define Fedora VM
 resource "proxmox_vm_qemu" "fedora" {
   vmid         = var.vm_id_min + 1
