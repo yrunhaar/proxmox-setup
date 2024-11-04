@@ -12,24 +12,27 @@ PACKER_DIR="$PROXMOX_SETUP_DIR/packer/talos-packer"
 PACKER_VAR_FILE="$PACKER_DIR/vars/local.pkrvars.hcl"
 TERRAFORM_DIR="$PROXMOX_SETUP_DIR/terraform"
 TF_PLAN_FILE="$TERRAFORM_DIR/.tfplan"
+PACKER_VM_ID="9300"
+OUTPUT_FILE="/tmp/terraform_output.txt"  # Local file path
+
+# Prompt for VM_ID
+read -p "Enter the VM ID to send Terraform output (leave blank to save locally only): " VM_ID
 
 # Function to check if VM exists
 check_vm_exists() {
     local vm_id=$1
     if qm list | grep -q " $vm_id "; then
-        green "VM with ID $vm_id already exists. Skipping Packer build."
         return 0
     else
+        red "VM with ID $vm_id does not exist."
         return 1
     fi
 }
 
 # Function to build Packer image
 build_packer() {
-    local vm_id=9300  # Replace with your target VM ID
-
-    # Check if VM already exists
-    if check_vm_exists "$vm_id"; then
+    if check_vm_exists "$PACKER_VM_ID"; then
+        green "VM with ID $PACKER_VM_ID already exists. Skipping Packer build."
         return 0
     fi
 
@@ -54,10 +57,65 @@ build_terraform() {
     green "Terraform configuration applied successfully!"
 }
 
+# Prompt user for IP addresses
+prompt_for_ip_addresses() {
+    local master_count=${#MASTER_VMIDS[@]}
+    local worker_count=${#WORKER_VMIDS[@]}
+    MASTER_IPS=()
+    WORKER_IPS=()
+
+    blue "Please enter the IP addresses for each master and worker VM by checking DHCP Leases in pfSense GUI."
+
+    for ((i=0; i<master_count; i++)); do
+        read -p "Enter IP address for Master VM ID ${MASTER_VMIDS[$i]} (MAC: ${MASTER_MACS[$i]}): " master_ip
+        MASTER_IPS+=("$master_ip")
+    done
+
+    for ((i=0; i<worker_count; i++)); do
+        read -p "Enter IP address for Worker VM ID ${WORKER_VMIDS[$i]} (MAC: ${WORKER_MACS[$i]}): " worker_ip
+        WORKER_IPS+=("$worker_ip")
+    done
+
+    green "IP addresses collected for all Master and Worker VMs."
+}
+
+# Function to export Terraform output and IPs
+export_terraform_output() {
+    # Capture Terraform output in a local file
+    terraform -chdir="$TERRAFORM_DIR" output -json > "$OUTPUT_FILE"
+    
+    # Append manually entered IPs to output file
+    echo -e "\n{\n\"master_ips\": [" >> "$OUTPUT_FILE"
+    for ip in "${MASTER_IPS[@]}"; do
+        echo "  \"$ip\"," >> "$OUTPUT_FILE"
+    done
+    echo -e "],\n\"worker_ips\": [" >> "$OUTPUT_FILE"
+    for ip in "${WORKER_IPS[@]}"; do
+        echo "  \"$ip\"," >> "$OUTPUT_FILE"
+    done
+    echo -e "]\n}" >> "$OUTPUT_FILE"
+
+    green "Terraform output and IP addresses saved locally at $OUTPUT_FILE."
+
+    # Check if VM_ID is provided and VM exists
+    if [[ -n "$VM_ID" ]] && check_vm_exists "$VM_ID"; then
+        blue "Sending Terraform output to VM with ID $VM_ID..."
+        
+        # Send file to /tmp/terraform_output.txt on the VM
+        qm guest exec "$VM_ID" -- /bin/bash -c "cat > /tmp/terraform_output.txt" < "$OUTPUT_FILE" || { red "Failed to send Terraform output to VM"; return 1; }
+
+        green "Terraform output successfully sent to VM with ID $VM_ID at /tmp/terraform_output.txt."
+    else
+        green "No VM ID provided or VM does not exist. Output saved locally only."
+    fi
+}
+
 # Main function
 main() {
     build_packer
     build_terraform
+    prompt_for_ip_addresses
+    export_terraform_output
 }
 
 # Call the main function
