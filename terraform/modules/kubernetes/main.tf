@@ -36,18 +36,18 @@ module "compute_worker" {
   }
 }
 
-output "master_ips" {
-  value = module.compute_master.ip_addresses
+output "master_vmids" {
+  value = module.compute_master.vmids
 }
 
-output "master_macs" {
-  value = module.compute_master.mac_addrs
+output "master_macaddrs" {
+  value = module.compute_master.macaddrs
 }
 
-output "worker_ips" {
-  value = module.compute_worker.ip_addresses
+output "worker_vmids" {
+  value = module.compute_worker.vmids
 }
 
-output "worker_macs" {
-  value = module.compute_worker.mac_addrs
+output "worker_macaddrs" {
+  value = module.compute_worker.macaddrs
 }

@@ -66,10 +66,10 @@ resource "proxmox_vm_qemu" "kubernetes_talos" {
     cloudinit_cdrom_storage = var.storage_pool
 }
 
-output "mac_addrs" {
-    value = [for value in proxmox_vm_qemu.kubernetes_talos : lower(tostring(value.network[0].macaddr))]
+output "vmids" {
+  value = [for vm in proxmox_vm_qemu.kubernetes_talos : vm.vmid]
 }
 
-output "ip_addresses" {
-  value = [for vm in proxmox_vm_qemu.kubernetes_talos : vm.network[0].ip]
+output "macaddrs" {
+    value = [for vm in proxmox_vm_qemu.kubernetes_talos : lower(tostring(vm.network[0].macaddr))]
 }

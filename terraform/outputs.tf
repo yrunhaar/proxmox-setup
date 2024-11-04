@@ -1,23 +1,16 @@
-# outputs.tf
-
-# Capture master node IPs
-output "master_ips" {
-  value = module.kubernetes_vms.master_ips
-}
-
 # Capture master node MAC addresses
-output "master_macs" {
-  value = module.kubernetes_vms.master_macs
+output "master_macaddrs" {
+  value = module.kubernetes_vms.master_macaddrs
 }
 
 # Capture worker node IPs
-output "worker_ips" {
-  value = module.kubernetes_vms.worker_ips
+output "worker_vmids" {
+  value = module.kubernetes_vms.worker_vmids
 }
 
 # Capture worker node MAC addresses
-output "worker_macs" {
-  value = module.kubernetes_vms.worker_macs
+output "worker_macaddrs" {
+  value = module.kubernetes_vms.worker_macaddrs
 }
 
 # Talos Version Output
