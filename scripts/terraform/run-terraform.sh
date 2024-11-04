@@ -79,22 +79,39 @@ prompt_for_ip_addresses() {
     green "IP addresses collected for all Master and Worker VMs."
 }
 
-# Function to export Terraform output and IPs
+# Function to export Terraform output
 export_terraform_output() {
     # Capture Terraform output in a local file
     terraform -chdir="$TERRAFORM_DIR" output -json > "$OUTPUT_FILE"
-    
-    # Append manually entered IPs to output file
-    echo -e "\n{\n\"master_ips\": [" >> "$OUTPUT_FILE"
-    for ip in "${MASTER_IPS[@]}"; do
-        echo "  \"$ip\"," >> "$OUTPUT_FILE"
-    done
-    echo -e "],\n\"worker_ips\": [" >> "$OUTPUT_FILE"
-    for ip in "${WORKER_IPS[@]}"; do
-        echo "  \"$ip\"," >> "$OUTPUT_FILE"
-    done
-    echo -e "]\n}" >> "$OUTPUT_FILE"
+    green "Terraform output saved locally at $OUTPUT_FILE."
 
+    # Prompt user for IP addresses for each master and worker VM
+    blue "Please enter the IP addresses for each master and worker VM by checking DHCP Leases in the pfSense GUI (Status --> DHCP Leases)."
+
+    # Load MAC addresses from the JSON output
+    MASTER_MACS=($(jq -r '.master_macaddrs.value[]' "$OUTPUT_FILE"))
+    WORKER_MACS=($(jq -r '.worker_macaddrs.value[]' "$OUTPUT_FILE"))
+
+    # Prompt for Master IPs
+    MASTER_IPS=()
+    for mac in "${MASTER_MACS[@]}"; do
+        read -p "Enter IP address for master VM with MAC $mac: " ip
+        MASTER_IPS+=("\"$ip\"")
+    done
+
+    # Prompt for Worker IPs
+    WORKER_IPS=()
+    for mac in "${WORKER_MACS[@]}"; do
+        read -p "Enter IP address for worker VM with MAC $mac: " ip
+        WORKER_IPS+=("\"$ip\"")
+    done
+
+    # Update JSON file with IPs
+    jq --argjson master_ips "[${MASTER_IPS[*]}]" \
+       --argjson worker_ips "[${WORKER_IPS[*]}]" \
+       '. + {master_ips: $master_ips, worker_ips: $worker_ips}' "$OUTPUT_FILE" > /tmp/temp_output.json && mv /tmp/temp_output.json "$OUTPUT_FILE"
+
+    green "IP addresses collected for all Master and Worker VMs."
     green "Terraform output and IP addresses saved locally at $OUTPUT_FILE."
 
     # Check if VM_ID is provided and VM exists
@@ -114,7 +131,6 @@ export_terraform_output() {
 main() {
     build_packer
     build_terraform
-    prompt_for_ip_addresses
     export_terraform_output
 }
 
