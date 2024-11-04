@@ -79,30 +79,34 @@ prompt_for_ip_addresses() {
     green "IP addresses collected for all Master and Worker VMs."
 }
 
-# Function to export Terraform output and prompt for IPs
+# Function to export Terraform output and assign sequential IPs
 export_terraform_output() {
     # Capture Terraform output in a local file
     terraform -chdir="$TERRAFORM_DIR" output -json > "$OUTPUT_FILE"
     green "Terraform output saved locally at $OUTPUT_FILE."
 
-    # Prompt user for IP addresses for each master and worker VM
-    blue "Please enter the IP addresses for each master and worker VM by checking DHCP Leases in the pfSense GUI."
+    # Prompt for starting IP
+    read -p "Enter the starting IP address for the first master node (e.g., 192.168.1.100): " START_IP
+
+    # Calculate base IP and starting last octet
+    BASE_IP=$(echo "$START_IP" | cut -d '.' -f 1-3)
+    LAST_OCTET=$(echo "$START_IP" | cut -d '.' -f 4)
 
     # Load MAC addresses from the JSON output
     MASTER_MACS=($(jq -r '.master_macaddrs.value[]' "$OUTPUT_FILE"))
     WORKER_MACS=($(jq -r '.worker_macaddrs.value[]' "$OUTPUT_FILE"))
 
-    # Prompt for Master IPs
+    # Generate IPs for Master VMs
     MASTER_IPS=()
-    for mac in "${MASTER_MACS[@]}"; do
-        read -p "Enter IP address for master VM with MAC $mac: " ip
+    for i in "${!MASTER_MACS[@]}"; do
+        ip="$BASE_IP.$((LAST_OCTET + i))"
         MASTER_IPS+=("\"$ip\"")
     done
 
-    # Prompt for Worker IPs
+    # Generate IPs for Worker VMs
     WORKER_IPS=()
-    for mac in "${WORKER_MACS[@]}"; do
-        read -p "Enter IP address for worker VM with MAC $mac: " ip
+    for i in "${!WORKER_MACS[@]}"; do
+        ip="$BASE_IP.$((LAST_OCTET + ${#MASTER_MACS[@]} + i))"
         WORKER_IPS+=("\"$ip\"")
     done
 
@@ -111,7 +115,7 @@ export_terraform_output() {
        --argjson worker_ips "$(echo "[${WORKER_IPS[*]}]" | jq .)" \
        '. + {master_ips: $master_ips, worker_ips: $worker_ips}' "$OUTPUT_FILE" > /tmp/temp_output.json && mv /tmp/temp_output.json "$OUTPUT_FILE"
 
-    green "IP addresses collected for all Master and Worker VMs."
+    green "IP addresses automatically assigned for all Master and Worker VMs."
     green "Terraform output and IP addresses saved locally at $OUTPUT_FILE."
 
     # Check if VM_ID is provided and VM exists
