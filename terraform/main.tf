@@ -24,6 +24,10 @@ module "service_vms" {
   storage_pool = var.storage_pool
   target_node  = var.target_node
   mattermost_ct_template = var.mattermost_ct_template
+
+  providers = {
+    proxmox = proxmox
+  }
 }
 
 # Importing Kubernetes VMs (Talos Control and Worker Nodes)
@@ -34,6 +38,10 @@ module "kubernetes_vms" {
   talos_version = var.talos_version
   storage_pool   = var.storage_pool
   target_node    = var.target_node
+
+  providers = {
+    proxmox = proxmox
+  }
 }
 
 # Importing database VMs (PostgreSQL, MongoDB, etc.)
@@ -44,4 +52,8 @@ module "database_vms" {
   storage_pool = var.storage_pool
   target_node  = var.target_node
   postgresql_ct_template = var.postgresql_ct_template
+
+  providers = {
+    proxmox = proxmox
+  }
 }
