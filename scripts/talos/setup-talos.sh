@@ -75,15 +75,15 @@ talosVersion: "${TALOS_VERSION}"
 kubernetesVersion: "v1.30.0"
 
 clusterName: "cluster-01"
-endpoint: "https://192.168.0.199:6443"
+endpoint: "https://192.168.1.20:6443"
 clusterPodNets:
   - "10.14.0.0/16"
 clusterSvcNets:
   - "10.15.0.0/16"
 additionalApiServerCertSans:
-  - "192.168.0.199"
+  - "192.168.1.20"
 additionalMachineCertSans:
-  - "192.168.0.199"
+  - "192.168.1.20"
 
 nodes:
   - hostname: "talos-master-00"
@@ -96,7 +96,7 @@ nodes:
           hardwareAddr: "${MASTER_MACS[0]}"
         dhcp: true
         vip:
-          ip: "192.168.0.199"
+          ip: "192.168.1.20"
 
   - hostname: "talos-master-01"
     controlPlane: true
@@ -108,7 +108,7 @@ nodes:
           hardwareAddr: "${MASTER_MACS[1]}"
         dhcp: true
         vip:
-          ip: "192.168.0.199"
+          ip: "192.168.1.20"
 
   - hostname: "talos-master-02"
     controlPlane: true
@@ -120,7 +120,7 @@ nodes:
           hardwareAddr: "${MASTER_MACS[2]}"
         dhcp: true
         vip:
-          ip: "192.168.0.199"
+          ip: "192.168.1.20"
 
   - hostname: "talos-worker-00"
     controlPlane: false
@@ -302,7 +302,7 @@ metadata:
   name: "cilium-lb-pool"
 spec:
   cidrs:
-  - cidr: "192.168.0.100/30"
+  - cidr: "192.168.1.10/30"
 EOF
 
     cat <<EOF | kubectl apply -f -
@@ -329,7 +329,7 @@ install_ingress_nginx() {
         --create-namespace \
         --set controller.externalTrafficPolicy="Local" \
         --set controller.kind="DaemonSet" \
-        --set controller.service.annotations."io.cilium/lb-ipam-ips"="192.168.0.101"
+        --set controller.service.annotations."io.cilium/lb-ipam-ips"="192.168.1.15"
     kubectl get svc ingress-nginx-controller -n ingress-nginx
 }
 
