@@ -209,18 +209,30 @@ generate_talos_config() {
 
     # Create Age secret key for Sops
     blue "Creating Age secret key..."
-    age-keygen -o "$AGE_CONFIG_DIR/keys.txt"
+    # Generate Age key with appropriate permissions
+    if age-keygen -o "$AGE_CONFIG_DIR/keys.txt"; then
+        chmod 600 "$AGE_CONFIG_DIR/keys.txt"  # Ensure key file is accessible
+        green "Age key generated and permissions set successfully."
+    else
+        red "Failed to generate Age key."
+        exit 1
+    fi
 
-    # Create .sops.yaml configuration for Sops
+    # Extract Age keys and format them without quotes
+    AGE_KEYS=$(grep -o 'age1[^\n]*' "$AGE_CONFIG_DIR/keys.txt" | paste -sd, -) # Comma-separated Age keys
+
+    # Create .sops.yaml configuration for Sops with properly formatted keys
     cat <<EOF > "$TALOS_DIR/.sops.yaml"
 ---
 creation_rules:
-  - age: "$(grep -o 'age1.*' $AGE_CONFIG_DIR/keys.txt)"
+  - age: >-
+      $AGE_KEYS
 EOF
 
     # Encrypt Talos secrets with Age and Sops
     blue "Encrypting Talos secrets..."
-    sops -e -i talsecret.sops.yaml
+    sops -e -i talsecret.sops.yaml || { red "Failed to encrypt Talos secrets"; exit 1; }
+    green "Talos secrets encrypted in $TALOS_CONFIG_DIR."
 
     # Generate Talos configuration files
     blue "Generating Talos configuration files..."
