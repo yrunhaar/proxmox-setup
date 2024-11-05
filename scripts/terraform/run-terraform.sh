@@ -86,9 +86,42 @@ export_terraform_output() {
     terraform -chdir="$TERRAFORM_DIR" output -json > "$OUTPUT_FILE"
     green "Terraform output saved locally at $OUTPUT_FILE."
 
+    # Prompt for starting IP
+    read -p "Enter the starting IP address for the first master node (e.g., 192.168.1.100): " START_IP
+
+    # Calculate base IP and starting last octet
+    BASE_IP=$(echo "$START_IP" | cut -d '.' -f 1-3)
+    LAST_OCTET=$(echo "$START_IP" | cut -d '.' -f 4)
+
+    # Load MAC addresses from the JSON output
+    MASTER_MACS=($(jq -r '.master_macaddrs.value[]' "$OUTPUT_FILE"))
+    WORKER_MACS=($(jq -r '.worker_macaddrs.value[]' "$OUTPUT_FILE"))
+
+    # Generate IPs for Master VMs
+    MASTER_IPS=()
+    for i in "${!MASTER_MACS[@]}"; do
+        ip="$BASE_IP.$((LAST_OCTET + i))"
+        MASTER_IPS+=("$ip")
+    done
+
+    # Generate IPs for Worker VMs
+    WORKER_IPS=()
+    for i in "${!WORKER_MACS[@]}"; do
+        ip="$BASE_IP.$((LAST_OCTET + ${#MASTER_MACS[@]} + i))"
+        WORKER_IPS+=("$ip")
+    done
+
+    # Add IP addresses to JSON file in correct format
+    jq --argjson master_ips "$(printf '%s\n' "${MASTER_IPS[@]}" | jq -R . | jq -s .)" \
+       --argjson worker_ips "$(printf '%s\n' "${WORKER_IPS[@]}" | jq -R . | jq -s .)" \
+       '. + {master_ips: $master_ips, worker_ips: $worker_ips}' "$OUTPUT_FILE" > /tmp/temp_output.json && mv /tmp/temp_output.json "$OUTPUT_FILE"
+
+    green "IP addresses automatically assigned for all Master and Worker VMs."
+    green "Combined Terraform output and IP addresses saved locally at $OUTPUT_FILE."
+
     # Verify the content of the file before attempting to send it to VM
     if [[ -s "$OUTPUT_FILE" ]]; then
-        green "Output file verified with content."
+        green "Output file verified with IP addresses."
     else
         red "Output file is empty. Check the process for errors."
         exit 1
