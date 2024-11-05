@@ -10,11 +10,28 @@ cyan() { echo -e "\033[36m$1\033[0m"; }
 OUTPUT_DIR="/tmp/proxmox-setup"
 OUTPUT_FILE="$OUTPUT_DIR/terraform_output.txt"
 
+# Define paths
 TALOS_DIR="$HOME/talos"
 TALOS_CONFIG_DIR="$TALOS_DIR/clusterconfig"
 TALOS_CONFIG_FILE="$HOME/.talos/config"
 KUBE_CONFIG_DIR="$HOME/.kube"
 KUBE_CONFIG_FILE="$KUBE_CONFIG_DIR/config"
+
+# Function to create directories if they don't exist
+ensure_directories() {
+    local dirs=("$TALOS_DIR" "$TALOS_CONFIG_DIR" "$(dirname "$TALOS_CONFIG_FILE")" "$KUBE_CONFIG_DIR")
+
+    for dir in "${dirs[@]}"; do
+        if [[ ! -d "$dir" ]]; then
+            mkdir -p "$dir" && green "Created directory: $dir" || red "Failed to create directory: $dir"
+        else
+            blue "Directory already exists: $dir"
+        fi
+    done
+}
+
+# Call the function to ensure directories
+ensure_directories
 
 # Load values from the output file
 if [[ -f "$OUTPUT_FILE" ]]; then
