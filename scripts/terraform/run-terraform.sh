@@ -13,7 +13,7 @@ PACKER_VAR_FILE="$PACKER_DIR/vars/local.pkrvars.hcl"
 TERRAFORM_DIR="$PROXMOX_SETUP_DIR/terraform"
 TF_PLAN_FILE="$TERRAFORM_DIR/.tfplan"
 PACKER_VM_ID="9300"
-OUTPUT_FILE="/tmp/terraform_output.txt"  # Local file path
+OUTPUT_FILE="/proxmox-setup/terraform_output.txt"  # Local file path
 
 # Prompt for VM_ID
 read -p "Enter the VM ID to send Terraform output (leave blank to save locally only): " VM_ID
@@ -128,12 +128,28 @@ export_terraform_output() {
 
     # Check if VM_ID is provided and VM exists
     if [[ -n "$VM_ID" ]] && check_vm_exists "$VM_ID"; then
-        blue "Sending Terraform output to VM with ID $VM_ID..."
-        
-        # Send file to /tmp/terraform_output.txt on the VM
-        qm guest exec "$VM_ID" -- /bin/bash -c "cat > /tmp/terraform_output.txt" < "$OUTPUT_FILE" || { red "Failed to send Terraform output to VM"; return 1; }
+        blue "Sending Terraform output and setup scripts to VM with ID $VM_ID..."
 
-        green "Terraform output successfully sent to VM with ID $VM_ID at /tmp/terraform_output.txt."
+        # Send terraform_output.txt to the VM
+        while IFS= read -r line; do
+            qm guest exec "$VM_ID" -- /bin/bash -c "echo \"$line\" >> /proxmox-setup/terraform_output.txt"
+        done < "$OUTPUT_FILE" || { red "Failed to send Terraform output to VM"; return 1; }
+
+        # Send additional setup scripts to the VM
+        qm guest exec "$VM_ID" -- mkdir -p /proxmox-setup || { red "Failed to create setup directory on VM"; return 1; }
+        qm guest exec "$VM_ID" -- mkdir -p /proxmox-setup/scripts || { red "Failed to create scripts directory on VM"; return 1; }
+        
+        # Copy setup-talos.sh
+        while IFS= read -r line; do
+            qm guest exec "$VM_ID" -- /bin/bash -c "echo \"$line\" >> /proxmox-setup/setup-talos.sh"
+        done < "$PROXMOX_SETUP_DIR/scripts/talos/setup-talos.sh" || { red "Failed to send setup-talos.sh to VM"; return 1; }
+        
+        # Copy install-tools.sh
+        while IFS= read -r line; do
+            qm guest exec "$VM_ID" -- /bin/bash -c "echo \"$line\" >> /proxmox-setup/install-tools.sh"
+        done < "$PROXMOX_SETUP_DIR/scripts/setup/install-tools.sh" || { red "Failed to send install-tools.sh to VM"; return 1; }
+
+        green "Terraform output and setup scripts successfully sent to VM with ID $VM_ID."
     else
         green "No VM ID provided or VM does not exist. Output saved locally only."
     fi

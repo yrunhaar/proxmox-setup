@@ -14,23 +14,22 @@ TERRAFORM_DIR="$PROXMOX_SETUP_DIR/terraform"
 TALOS_CONFIG_FILE="$HOME/.talos/config"
 KUBE_CONFIG_DIR="$HOME/.kube"
 KUBE_CONFIG_FILE="$KUBE_CONFIG_DIR/config"
-OUTPUT_FILE="/tmp/terraform_output.txt"  # Temporary file path
+OUTPUT_FILE="/proxmox-setup/terraform_output.txt"
 
-# Load values from the temporary output file
+# Load values from the output file
 if [[ -f "$OUTPUT_FILE" ]]; then
-    # Extract values using jq from the JSON file
-    MASTER_VMIDS=($(jq -r '.master_vmids[]' "$OUTPUT_FILE"))
-    MASTER_MACS=($(jq -r '.master_macaddrs[]' "$OUTPUT_FILE"))
-    WORKER_VMIDS=($(jq -r '.worker_vmids[]' "$OUTPUT_FILE"))
-    WORKER_MACS=($(jq -r '.worker_macaddrs[]' "$OUTPUT_FILE"))
+    MASTER_VMIDS=($(jq -r '.master_vmids.value[]' "$OUTPUT_FILE"))
+    MASTER_MACS=($(jq -r '.master_macaddrs.value[]' "$OUTPUT_FILE"))
+    WORKER_VMIDS=($(jq -r '.worker_vmids.value[]' "$OUTPUT_FILE"))
+    WORKER_MACS=($(jq -r '.worker_macaddrs.value[]' "$OUTPUT_FILE"))
     MASTER_IPS=($(jq -r '.master_ips[]' "$OUTPUT_FILE"))
     WORKER_IPS=($(jq -r '.worker_ips[]' "$OUTPUT_FILE"))
-    TALOS_VERSION=$(jq -r '.talos_version' "$OUTPUT_FILE")
-    TALOS_DISK_IMAGE_ID=$(jq -r '.talos_disk_image_id' "$OUTPUT_FILE")
-    
+    TALOS_VERSION=$(jq -r '.talos_version.value' "$OUTPUT_FILE")
+    TALOS_DISK_IMAGE_ID=$(jq -r '.talos_disk_image_id.value' "$OUTPUT_FILE")
+
     blue "Loaded values from $OUTPUT_FILE"
 else
-    red "Error: Output file $OUTPUT_FILE not found. Make sure to run the export script first."
+    red "Error: Output file $OUTPUT_FILE not found."
     exit 1
 fi
 
