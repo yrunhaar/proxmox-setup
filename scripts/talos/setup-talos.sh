@@ -74,7 +74,7 @@ generate_talos_yaml_config() {
 talosVersion: "${TALOS_VERSION}"
 kubernetesVersion: "v1.30.0"
 
-clusterName: "talos-cluster"
+clusterName: "cluster-01"
 endpoint: "https://192.168.0.199:6443"
 clusterPodNets:
   - "10.14.0.0/16"
@@ -236,7 +236,7 @@ apply_talos_config() {
     # Apply configuration for each master node
     for i in "${!MASTER_IPS[@]}"; do
         master_ip="${MASTER_IPS[$i]}"
-        config_file="$TALOS_CONFIG_DIR/master-config-$(printf '%02d' "$i").yaml"
+        config_file="$TALOS_CONFIG_DIR/cluster-01-talos-master-$(printf '%02d' "$i").yaml"
         blue "Applying configuration to master node at $master_ip"
         talosctl apply-config --insecure --nodes "$master_ip" --file "$config_file"
     done
@@ -244,7 +244,7 @@ apply_talos_config() {
     # Apply configuration for each worker node
     for i in "${!WORKER_IPS[@]}"; do
         worker_ip="${WORKER_IPS[$i]}"
-        config_file="$TALOS_CONFIG_DIR/worker-config-$(printf '%02d' "$i").yaml"
+        config_file="$TALOS_CONFIG_DIR/cluster-01-talos-worker-$(printf '%02d' "$i").yaml"
         blue "Applying configuration to worker node at $worker_ip"
         talosctl apply-config --insecure --nodes "$worker_ip" --file "$config_file"
     done
