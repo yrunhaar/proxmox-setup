@@ -131,23 +131,23 @@ export_terraform_output() {
     if [[ -n "$VM_ID" ]] && check_vm_exists "$VM_ID"; then
         blue "Sending Terraform output and setup scripts to VM with ID $VM_ID..."
 
+        # Send additional setup scripts to the VM
+        qm guest exec "$VM_ID" -- mkdir -p $PROXMOX_SETUP_DIR || { red "Failed to create setup directory on VM"; return 1; }
+        qm guest exec "$VM_ID" -- mkdir -p $PROXMOX_SETUP_DIR/scripts || { red "Failed to create scripts directory on VM"; return 1; }
+
         # Send terraform_output.txt to the VM
         while IFS= read -r line; do
-            qm guest exec "$VM_ID" -- /bin/bash -c "echo \"$line\" >> /proxmox-setup/terraform_output.txt"
+            qm guest exec "$VM_ID" -- /bin/bash -c "echo \"$line\" >> $PROXMOX_SETUP_DIR/terraform_output.txt"
         done < "$OUTPUT_FILE" || { red "Failed to send Terraform output to VM"; return 1; }
-
-        # Send additional setup scripts to the VM
-        qm guest exec "$VM_ID" -- mkdir -p /proxmox-setup || { red "Failed to create setup directory on VM"; return 1; }
-        qm guest exec "$VM_ID" -- mkdir -p /proxmox-setup/scripts || { red "Failed to create scripts directory on VM"; return 1; }
         
         # Copy setup-talos.sh
         while IFS= read -r line; do
-            qm guest exec "$VM_ID" -- /bin/bash -c "echo \"$line\" >> /proxmox-setup/setup-talos.sh"
+            qm guest exec "$VM_ID" -- /bin/bash -c "echo \"$line\" >> $PROXMOX_SETUP_DIR/setup-talos.sh"
         done < "$PROXMOX_SETUP_DIR/scripts/talos/setup-talos.sh" || { red "Failed to send setup-talos.sh to VM"; return 1; }
         
         # Copy install-tools.sh
         while IFS= read -r line; do
-            qm guest exec "$VM_ID" -- /bin/bash -c "echo \"$line\" >> /proxmox-setup/install-tools.sh"
+            qm guest exec "$VM_ID" -- /bin/bash -c "echo \"$line\" >> $PROXMOX_SETUP_DIR/install-tools.sh"
         done < "$PROXMOX_SETUP_DIR/scripts/setup/install-tools.sh" || { red "Failed to send install-tools.sh to VM"; return 1; }
 
         green "Terraform output and setup scripts successfully sent to VM with ID $VM_ID."
