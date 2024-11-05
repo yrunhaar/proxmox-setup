@@ -76,15 +76,15 @@ talosVersion: "${TALOS_VERSION}"
 kubernetesVersion: "v1.30.0"
 
 clusterName: "cluster-01"
-endpoint: "https://192.168.1.20:6443"
+endpoint: "https://192.168.1.50:6443"
 clusterPodNets:
   - "10.14.0.0/16"
 clusterSvcNets:
   - "10.15.0.0/16"
 additionalApiServerCertSans:
-  - "192.168.1.20"
+  - "192.168.1.50"
 additionalMachineCertSans:
-  - "192.168.1.20"
+  - "192.168.1.50"
 
 nodes:
   - hostname: "talos-master-00"
@@ -97,7 +97,7 @@ nodes:
           hardwareAddr: "${MASTER_MACS[0]}"
         dhcp: true
         vip:
-          ip: "192.168.1.20"
+          ip: "192.168.1.50"
 
   - hostname: "talos-master-01"
     controlPlane: true
@@ -109,7 +109,7 @@ nodes:
           hardwareAddr: "${MASTER_MACS[1]}"
         dhcp: true
         vip:
-          ip: "192.168.1.20"
+          ip: "192.168.1.50"
 
   - hostname: "talos-master-02"
     controlPlane: true
@@ -121,7 +121,7 @@ nodes:
           hardwareAddr: "${MASTER_MACS[2]}"
         dhcp: true
         vip:
-          ip: "192.168.1.20"
+          ip: "192.168.1.50"
 
   - hostname: "talos-worker-00"
     controlPlane: false
@@ -328,7 +328,19 @@ install_longhorn() {
     green "Longhorn installed. Talos Kubernetes cluster setup is complete!"
 }
 
-# Main function
+# Step 8: Install Theila UI for Talos
+install_theila() {
+    blue "Installing Theila UI for Talos..."
+    # Download Theila binary
+    curl -Lo /usr/local/bin/theila https://github.com/siderolabs/theila/releases/download/v0.2.1/theila-$(uname -s | tr "[:upper:]" "[:lower:]")-amd64
+    chmod +x /usr/local/bin/theila
+
+    # Start Theila on port 8080
+    theila --address 0.0.0.0 --port 8080 &
+    green "Theila UI installed and running on port 8080."
+}
+
+# Main function with Theila step added
 main() {
     generate_talos_yaml_config
     generate_talos_config
@@ -337,6 +349,7 @@ main() {
     configure_metallb
     install_metallb
     install_longhorn
+    install_theila
 }
 
 # Execute the main function
