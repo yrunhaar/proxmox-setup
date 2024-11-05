@@ -86,42 +86,9 @@ export_terraform_output() {
     terraform -chdir="$TERRAFORM_DIR" output -json > "$OUTPUT_FILE"
     green "Terraform output saved locally at $OUTPUT_FILE."
 
-    # Prompt for starting IP
-    read -p "Enter the starting IP address for the first master node (e.g., 192.168.1.100): " START_IP
-
-    # Calculate base IP and starting last octet
-    BASE_IP=$(echo "$START_IP" | cut -d '.' -f 1-3)
-    LAST_OCTET=$(echo "$START_IP" | cut -d '.' -f 4)
-
-    # Load MAC addresses from the JSON output
-    MASTER_MACS=($(jq -r '.master_macaddrs.value[]' "$OUTPUT_FILE"))
-    WORKER_MACS=($(jq -r '.worker_macaddrs.value[]' "$OUTPUT_FILE"))
-
-    # Generate IPs for Master VMs
-    MASTER_IPS=()
-    for i in "${!MASTER_MACS[@]}"; do
-        ip="$BASE_IP.$((LAST_OCTET + i))"
-        MASTER_IPS+=("$ip")
-    done
-
-    # Generate IPs for Worker VMs
-    WORKER_IPS=()
-    for i in "${!WORKER_MACS[@]}"; do
-        ip="$BASE_IP.$((LAST_OCTET + ${#MASTER_MACS[@]} + i))"
-        WORKER_IPS+=("$ip")
-    done
-
-    # Add IP addresses to JSON file in correct format
-    jq --argjson master_ips "$(printf '%s\n' "${MASTER_IPS[@]}" | jq -R . | jq -s .)" \
-       --argjson worker_ips "$(printf '%s\n' "${WORKER_IPS[@]}" | jq -R . | jq -s .)" \
-       '. + {master_ips: $master_ips, worker_ips: $worker_ips}' "$OUTPUT_FILE" > /tmp/temp_output.json && mv /tmp/temp_output.json "$OUTPUT_FILE"
-
-    green "IP addresses automatically assigned for all Master and Worker VMs."
-    green "Combined Terraform output and IP addresses saved locally at $OUTPUT_FILE."
-
     # Verify the content of the file before attempting to send it to VM
     if [[ -s "$OUTPUT_FILE" ]]; then
-        green "Output file verified with IP addresses."
+        green "Output file verified with content."
     else
         red "Output file is empty. Check the process for errors."
         exit 1
@@ -131,17 +98,25 @@ export_terraform_output() {
     if [[ -n "$VM_ID" ]] && check_vm_exists "$VM_ID"; then
         blue "Sending Terraform output and setup scripts to VM with ID $VM_ID..."
 
-        # Send additional setup scripts to the VM’s temporary directory under /tmp/proxmox-setup
-        qm guest exec "$VM_ID" -- mkdir -p /tmp/proxmox-setup/scripts/talos || { red "Failed to create directories on VM"; return 1; }
+        # Ensure the directories exist on the VM
+        qm guest exec "$VM_ID" -- mkdir -p /tmp/proxmox-setup/scripts || { red "Failed to create directories on VM"; return 1; }
+
+        # Function to transfer a file in one go
+        function transfer_file() {
+            local src_file=$1
+            local dest_file=$2
+
+            cat "$src_file" | qm guest exec "$VM_ID" -- /bin/bash -c "cat > \"$dest_file\"" || { red "Failed to send $src_file to VM"; return 1; }
+        }
 
         # Transfer terraform_output.txt
-        cat "$OUTPUT_FILE" | qm guest exec "$VM_ID" -- /bin/bash -c 'cat > /tmp/proxmox-setup/terraform_output.txt' || { red "Failed to send Terraform output to VM"; return 1; }
+        transfer_file "$OUTPUT_FILE" "/tmp/proxmox-setup/terraform_output.txt"
 
         # Transfer setup-talos.sh
-        cat "$PROXMOX_SETUP_DIR/scripts/talos/setup-talos.sh" | qm guest exec "$VM_ID" -- /bin/bash -c 'cat > /tmp/proxmox-setup/scripts/talos/setup-talos.sh' || { red "Failed to send setup-talos.sh to VM"; return 1; }
+        transfer_file "$PROXMOX_SETUP_DIR/scripts/talos/setup-talos.sh" "/tmp/proxmox-setup/scripts/setup-talos.sh"
 
         # Transfer install-tools.sh
-        cat "$PROXMOX_SETUP_DIR/scripts/setup/install-tools.sh" | qm guest exec "$VM_ID" -- /bin/bash -c 'cat > /tmp/proxmox-setup/install-tools.sh' || { red "Failed to send install-tools.sh to VM"; return 1; }
+        transfer_file "$PROXMOX_SETUP_DIR/scripts/setup/install-tools.sh" "/tmp/proxmox-setup/scripts/install-tools.sh"
 
         green "Terraform output and setup scripts successfully sent to VM with ID $VM_ID."
     else
