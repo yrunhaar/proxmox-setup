@@ -219,14 +219,14 @@ generate_talos_config() {
     fi
 
     # Extract Age keys and format them without quotes
-    AGE_KEYS=$(grep -o 'age1[^\n]*' "$AGE_CONFIG_DIR/keys.txt" | paste -sd, -) # Comma-separated Age keys
+    AGE_KEY=$(grep -o 'age1.*' $HOME/.config/sops/age/keys.txt)
 
     # Create .sops.yaml configuration for Sops with properly formatted keys
     cat <<EOF > "$TALOS_DIR/.sops.yaml"
 ---
 creation_rules:
   - age: >-
-      $AGE_KEYS
+      $AGE_KEY
 EOF
 
     # Encrypt Talos secrets with Age and Sops
