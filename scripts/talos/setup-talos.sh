@@ -328,16 +328,19 @@ install_longhorn() {
     green "Longhorn installed. Talos Kubernetes cluster setup is complete!"
 }
 
-# Step 8: Install Theila UI for Talos
-install_theila() {
-    blue "Installing Theila UI for Talos..."
-    # Download Theila binary
-    curl -Lo /usr/local/bin/theila https://github.com/siderolabs/theila/releases/download/v0.2.1/theila-$(uname -s | tr "[:upper:]" "[:lower:]")-amd64
-    chmod +x /usr/local/bin/theila
+# Step 8: Install and Run Theila UI for Talos in Docker
+install_theila_docker() {
+    blue "Running Theila UI for Talos in Docker..."
 
-    # Start Theila on port 8080
-    theila --address 0.0.0.0 --port 8080 &
-    green "Theila UI installed and running on port 8080."
+    # Run Theila as a Docker container
+    docker run --rm \
+        --volume $HOME/.talos/config:/opt/talosconfig:ro \
+        --env TALOSCONFIG=/opt/talosconfig \
+        --publish 8080:8080 \
+        ghcr.io/siderolabs/theila \
+        --address 0.0.0.0
+
+    green "Theila UI is running in Docker on port 8080."
 }
 
 # Main function with Theila step added

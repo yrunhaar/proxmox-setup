@@ -143,7 +143,6 @@ export_terraform_output() {
         function transfer_file() {
             local src_file=$1
             local dest_file=$2
-            
             pvesh create /nodes/$PROXMOX_NODE/qemu/$VM_ID/agent/file-write --content "$(cat $src_file)" --file "$dest_file" || { red "Failed to send $src_file to VM"; return 1; }
         }
 
