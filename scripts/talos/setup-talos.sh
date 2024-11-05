@@ -329,18 +329,19 @@ install_longhorn() {
 }
 
 # Step 8: Install and Run Theila UI for Talos in Docker
-install_theila_docker() {
+install_theila() {
     blue "Running Theila UI for Talos in Docker..."
 
-    # Run Theila as a Docker container
-    docker run --rm \
-        --volume $HOME/.talos/config:/opt/talosconfig:ro \
+    # Run Theila as a Docker container in detached mode
+    docker run -d \
+        --rm \
+        --volume ${HOME}/.talos/config:/opt/talosconfig:ro \
         --env TALOSCONFIG=/opt/talosconfig \
         --publish 8080:8080 \
         ghcr.io/siderolabs/theila \
         --address 0.0.0.0
 
-    green "Theila UI is running in Docker on port 8080."
+    green "Theila UI is running in Docker on port 8080 in detached mode."
 }
 
 # Main function with Theila step added
