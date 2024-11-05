@@ -14,7 +14,7 @@ TERRAFORM_DIR="$PROXMOX_SETUP_DIR/terraform"
 TALOS_CONFIG_FILE="$HOME/.talos/config"
 KUBE_CONFIG_DIR="$HOME/.kube"
 KUBE_CONFIG_FILE="$KUBE_CONFIG_DIR/config"
-OUTPUT_FILE="/proxmox-setup/terraform_output.txt"
+OUTPUT_FILE="$PROXMOX_SETUP_DIR/terraform_output.txt"
 
 # Load values from the output file
 if [[ -f "$OUTPUT_FILE" ]]; then

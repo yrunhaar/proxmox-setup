@@ -12,8 +12,9 @@ PACKER_DIR="$PROXMOX_SETUP_DIR/packer/talos-packer"
 PACKER_VAR_FILE="$PACKER_DIR/vars/local.pkrvars.hcl"
 TERRAFORM_DIR="$PROXMOX_SETUP_DIR/terraform"
 TF_PLAN_FILE="$TERRAFORM_DIR/.tfplan"
+OUTPUT_FILE="$PROXMOX_SETUP_DIR/terraform_output.txt"
+
 PACKER_VM_ID="9300"
-OUTPUT_FILE="/proxmox-setup/terraform_output.txt"  # Local file path
 
 # Prompt for VM_ID
 read -p "Enter the VM ID to send Terraform output (leave blank to save locally only): " VM_ID
