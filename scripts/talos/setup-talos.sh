@@ -14,6 +14,7 @@ OUTPUT_FILE="$OUTPUT_DIR/terraform_output.txt"
 TALOS_DIR="$HOME/talos"
 TALOS_CONFIG_DIR="$TALOS_DIR/clusterconfig"
 TALOS_CONFIG_FILE="$HOME/.talos/config"
+METALLB_CONFIG_DIR="$HOME/.metallb"
 KUBE_CONFIG_DIR="$HOME/.kube"
 KUBE_CONFIG_FILE="$KUBE_CONFIG_DIR/config"
 CONFIG_DIR="$HOME/.config"
@@ -22,7 +23,7 @@ AGE_CONFIG_DIR="$SOPS_CONFIG_DIR/age"
 
 # Function to create directories if they don't exist
 ensure_directories() {
-    local dirs=("$TALOS_DIR" "$TALOS_CONFIG_DIR" "$KUBE_CONFIG_DIR" "$CONFIG_DIR" "$SOPS_CONFIG_DIR" "$AGE_CONFIG_DIR")
+    local dirs=("$TALOS_DIR" "$TALOS_CONFIG_DIR" "$METALLB_CONFIG_DIR" "$KUBE_CONFIG_DIR" "$CONFIG_DIR" "$SOPS_CONFIG_DIR" "$AGE_CONFIG_DIR")
 
     for dir in "${dirs[@]}"; do
         if [[ ! -d "$dir" ]]; then
@@ -270,70 +271,51 @@ bootstrap_talos_cluster() {
     talosctl -n "$master_node_ip" kubeconfig "$KUBE_CONFIG_FILE"
     green "Kubeconfig saved to $KUBE_CONFIG_FILE"
 
+    green "Configuration applied to all nodes. Waiting for nodes to reboot..."
+    sleep 120  # Adjust this if nodes need more time to reboot
+
     # Verify node status
     cyan "Verifying the status of nodes..."
     kubectl get nodes
 }
 
-# Step 5: Install Cilium as the networking solution
-install_cilium() {
-    blue "Installing Cilium for Kubernetes networking..."
-    cilium install \
-        --helm-set=ipam.mode=kubernetes \
-        --helm-set=kubeProxyReplacement=true \
-        --helm-set=securityContext.capabilities.ciliumAgent="{CHOWN,KILL,NET_ADMIN,NET_RAW,IPC_LOCK,SYS_ADMIN,SYS_RESOURCE,DAC_OVERRIDE,FOWNER,SETGID,SETUID}" \
-        --helm-set=securityContext.capabilities.cleanCiliumState="{NET_ADMIN,SYS_ADMIN,SYS_RESOURCE}" \
-        --helm-set=cgroup.autoMount.enabled=false \
-        --helm-set=cgroup.hostRoot=/sys/fs/cgroup \
-        --helm-set=l2announcements.enabled=true \
-        --helm-set=externalIPs.enabled=true \
-        --helm-set=devices=eth+
-    kubectl get nodes
-    kubectl get pods -A
+# Step 5: Configure MetalLB IP Pool
+configure_metallb() {
+    blue "Configuring MetalLB IP Pool..."
+    cat > "$METALLB_CONFIG_DIR/metallb-values.yaml" <<EOF
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  namespace: metallb-system
+  name: metallb
+data:
+  config: |
+    peers:
+    - peer-address: 192.168.1.1
+      peer-asn: 64512
+      my-asn: 64513
+    address-pools:
+    - name: default
+      protocol: bgp
+      addresses:
+      - 192.168.1.200-192.168.1.255
+EOF
+    green "MetalLB configured."
 }
 
-# Step 6: Configure Cilium L2 Load Balancer IP Pool
-configure_cilium_loadbalancer() {
-    blue "Configuring Cilium Load Balancer IP Pool..."
-    cat <<EOF | kubectl apply -f -
-apiVersion: "cilium.io/v2alpha1"
-kind: CiliumLoadBalancerIPPool
-metadata:
-  name: "cilium-lb-pool"
-spec:
-  cidrs:
-  - cidr: "192.168.1.10/30"
-EOF
-
-    cat <<EOF | kubectl apply -f -
-apiVersion: "cilium.io/v2alpha1"
-kind: CiliumL2AnnouncementPolicy
-metadata:
-  name: "cilium-l2-policy"
-spec:
-  interfaces:
-  - eth0
-  externalIPs: true
-  loadBalancerIPs: true
-EOF
-    green "Cilium L2 Load Balancer configured."
-}
-
-# Step 7: Install Ingress NGINX Controller with Cilium LoadBalancer
-install_ingress_nginx() {
-    blue "Installing Ingress NGINX Controller with Cilium LoadBalancer..."
-    helm repo add ingress-nginx https://kubernetes.github.io/ingress-nginx
+# Step 6: Install MetalLB as the networking solution
+install_metallb() {
+    blue "Installing MetalLB for Kubernetes networking..."
+    helm repo add metallb https://metallb.github.io/metallb
     helm repo update
-    helm install ingress-nginx ingress-nginx/ingress-nginx \
-        --namespace ingress-nginx \
-        --create-namespace \
-        --set controller.externalTrafficPolicy="Local" \
-        --set controller.kind="DaemonSet" \
-        --set controller.service.annotations."io.cilium/lb-ipam-ips"="192.168.1.15"
-    kubectl get svc ingress-nginx-controller -n ingress-nginx
+    kubectl create namespace metallb-system
+    helm install -n metallb-system metallb metallb/metallb -f $METALLB_CONFIG_DIR/metallb-values.yaml
+    kubectl create configmap metallb --from-file=$METALLB_CONFIG_DIR/metallb-values.yaml
+    kubectl apply -f $METALLB_CONFIG_DIR/metallb-values.yaml
+    green "MetalLB installed and configs applied."
 }
 
-# Step 8: Install Longhorn for storage
+# Step 7: Install Longhorn for storage
 install_longhorn() {
     blue "Installing Longhorn as a storage solution..."
     helm repo add longhorn https://charts.longhorn.io
@@ -352,9 +334,8 @@ main() {
     generate_talos_config
     apply_talos_config
     bootstrap_talos_cluster
-    install_cilium
-    configure_cilium_loadbalancer
-    install_ingress_nginx
+    configure_metallb
+    install_metallb
     install_longhorn
 }
 

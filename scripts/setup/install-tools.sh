@@ -122,22 +122,18 @@ install_age() {
     fi
 }
 
-# Install Cilium CLI
-install_cilium_cli() {
-    if ! command -v cilium &> /dev/null; then
-        blue "Installing Cilium CLI..."
-        CILIUM_CLI_VERSION=$(curl -s https://raw.githubusercontent.com/cilium/cilium-cli/main/stable.txt)
-        CLI_ARCH=amd64
-        if [ "$(uname -m)" = "aarch64" ]; then CLI_ARCH=arm64; fi
-        curl -L --fail --remote-name-all https://github.com/cilium/cilium-cli/releases/download/${CILIUM_CLI_VERSION}/cilium-linux-${CLI_ARCH}.tar.gz{,.sha256sum}
-        sha256sum --check cilium-linux-${CLI_ARCH}.tar.gz.sha256sum
-        sudo tar xzvfC cilium-linux-${CLI_ARCH}.tar.gz /usr/local/bin
-        rm cilium-linux-${CLI_ARCH}.tar.gz{,.sha256sum}
-        green "Cilium CLI installed."
+# Install Helm
+install_helm() {
+    if ! command -v helm &> /dev/null; then
+        blue "Installing Helm..."
+        curl https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash
+        helm version
+        green "Helm installed."
     else
-        green "Cilium CLI is already installed."
+        green "Helm is already installed."
     fi
 }
+
 
 # Install Prometheus, Grafana, and Loki (for logging and monitoring)
 install_monitoring_tools() {
@@ -159,7 +155,7 @@ main() {
     install_kubectl
     install_sops
     install_age
-    install_cilium_cli
+    install_helm
     install_monitoring_tools
 }
 
