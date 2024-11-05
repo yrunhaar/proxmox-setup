@@ -46,7 +46,7 @@ install_gitlab_agent() {
     blue "Installing GitLab Agent ($AGENT_NAME) on VM $VM_ID..."
 
     send_command_to_vm "helm upgrade --install $AGENT_NAME gitlab/gitlab-agent \
-        --namespace $NAMESPACE \
+        --namespace $NAMESPACE-$AGENT_NAME \
         --create-namespace \
         --set config.token=$AGENT_TOKEN \
         --set config.kasAddress=$GITLAB_KAS_ADDRESS"
