@@ -7,14 +7,14 @@ blue() { echo -e "\033[34m$1\033[0m"; }
 cyan() { echo -e "\033[36m$1\033[0m"; }
 
 # Define paths
-PROXMOX_SETUP_DIR="$HOME/proxmox-setup"
-TALOS_DIR="$PROXMOX_SETUP_DIR/talos"
+OUTPUT_DIR="/tmp/proxmox-setup"
+OUTPUT_FILE="$OUTPUT_DIR/terraform_output.txt"
+
+TALOS_DIR="$HOME/talos"
 TALOS_CONFIG_DIR="$TALOS_DIR/clusterconfig"
-TERRAFORM_DIR="$PROXMOX_SETUP_DIR/terraform"
 TALOS_CONFIG_FILE="$HOME/.talos/config"
 KUBE_CONFIG_DIR="$HOME/.kube"
 KUBE_CONFIG_FILE="$KUBE_CONFIG_DIR/config"
-OUTPUT_FILE="$PROXMOX_SETUP_DIR/terraform_output.txt"
 
 # Load values from the output file
 if [[ -f "$OUTPUT_FILE" ]]; then
