@@ -16,14 +16,18 @@ TALOS_CONFIG_DIR="$TALOS_DIR/clusterconfig"
 TALOS_CONFIG_FILE="$HOME/.talos/config"
 KUBE_CONFIG_DIR="$HOME/.kube"
 KUBE_CONFIG_FILE="$KUBE_CONFIG_DIR/config"
+CONFIG_DIR="$HOME/.config"
+SOPS_CONFIG_DIR="$CONFIG_DIR/sops"
+AGE_CONFIG_DIR="$SOPS_CONFIG_DIR/age"
 
 # Function to create directories if they don't exist
 ensure_directories() {
-    local dirs=("$TALOS_DIR" "$TALOS_CONFIG_DIR" "$(dirname "$TALOS_CONFIG_FILE")" "$KUBE_CONFIG_DIR")
+    local dirs=("$TALOS_DIR" "$TALOS_CONFIG_DIR" "$KUBE_CONFIG_DIR" "$CONFIG_DIR" "$SOPS_CONFIG_DIR" "$AGE_CONFIG_DIR")
 
     for dir in "${dirs[@]}"; do
         if [[ ! -d "$dir" ]]; then
             mkdir -p "$dir" && green "Created directory: $dir" || red "Failed to create directory: $dir"
+            chmod -R 700 "$dir" || red "Failed to set permissions for directory: $dir"
         else
             blue "Directory already exists: $dir"
         fi
@@ -64,7 +68,7 @@ cyan "Talos Disk Image ID: $TALOS_DISK_IMAGE_ID"
 generate_talos_yaml_config() {
     blue "Generating Talos cluster configuration YAML file..."
 
-    cat > "$TALOS_CONFIG_FILE" <<EOF
+    cat > "$TALOS_DIR/talconfig.yaml" <<EOF
 # yaml-language-server: \$schema=https://raw.githubusercontent.com/budimanjojo/talhelper/master/pkg/config/schemas/talconfig.json
 ---
 talosVersion: "${TALOS_VERSION}"
@@ -205,14 +209,13 @@ generate_talos_config() {
 
     # Create Age secret key for Sops
     blue "Creating Age secret key..."
-    mkdir -p "$HOME/.config/sops/age"
-    age-keygen -o "$HOME/.config/sops/age/keys.txt"
+    age-keygen -o "$AGE_CONFIG_DIR/keys.txt"
 
     # Create .sops.yaml configuration for Sops
     cat <<EOF > "$TALOS_DIR/.sops.yaml"
 ---
 creation_rules:
-  - age: "$(grep -o 'age1.*' $HOME/.config/sops/age/keys.txt)"
+  - age: "$(grep -o 'age1.*' $AGE_CONFIG_DIR/keys.txt)"
 EOF
 
     # Encrypt Talos secrets with Age and Sops
