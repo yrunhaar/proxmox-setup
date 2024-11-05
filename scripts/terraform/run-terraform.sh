@@ -17,6 +17,8 @@ OUTPUT_FILE="$PROXMOX_SETUP_DIR/terraform_output.txt"
 PACKER_VM_ID="9300"
 
 # Prompt for VM_ID
+read -p "Enter Proxmox Node (default: pve-01): " PROXMOX_NODE
+PROXMOX_NODE=${PROXMOX_NODE:-"pve-01"}
 read -p "Enter the VM ID to send Terraform output (leave blank to save locally only): " VM_ID
 
 # Function to check if VM exists
@@ -138,8 +140,10 @@ export_terraform_output() {
         function transfer_file() {
             local src_file=$1
             local dest_file=$2
-
-            cat "$src_file" | qm guest exec "$VM_ID" -- /bin/bash -c "cat > \"$dest_file\"" || { red "Failed to send $src_file to VM"; return 1; }
+            # Read and encode the file in Base64
+            encoded_content=$(base64 -w 0 "$src_file")
+            # Use pvesh with encoded content
+            pvesh create /nodes/$PROXMOX_NODE/qemu/$VM_ID/agent/file-write --content "$encoded_content" --file "$dest_file" --encoding base64 || { red "Failed to send $src_file to VM"; return 1; }
         }
 
         # Transfer terraform_output.txt
