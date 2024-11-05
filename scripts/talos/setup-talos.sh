@@ -152,21 +152,6 @@ nodes:
           hardwareAddr: "${WORKER_MACS[2]}"
         dhcp: true
 
-patches:
-  - |-
-    cluster:
-      network:
-        cni:
-          name: "cilium"
-          config:
-            ipam: "kubernetes"
-            kubeProxyReplacement: true
-            l2announcements:
-              enabled: true
-            externalIPs:
-              enabled: true
-            devices: "eth+"
-
 controlPlane:
   patches:
     - |-
@@ -207,6 +192,9 @@ generate_talos_config() {
     blue "Generating Talos secrets..."
     talhelper gensecret > talsecret.sops.yaml
 
+    # Set Age key path for sops
+    export SOPS_AGE_KEY_FILE="$AGE_CONFIG_DIR/keys.txt"
+
     # Create Age secret key for Sops
     blue "Creating Age secret key..."
     # Generate Age key with appropriate permissions
@@ -219,7 +207,7 @@ generate_talos_config() {
     fi
 
     # Extract Age keys and format them without quotes
-    AGE_KEY=$(grep -o 'age1.*' $HOME/.config/sops/age/keys.txt)
+    AGE_KEY=$(grep -o 'age1.*' $AGE_CONFIG_DIR/keys.txt)
 
     # Create .sops.yaml configuration for Sops with properly formatted keys
     cat <<EOF > "$TALOS_DIR/.sops.yaml"
@@ -232,7 +220,7 @@ EOF
     # Encrypt Talos secrets with Age and Sops
     blue "Encrypting Talos secrets..."
     sops -e -i talsecret.sops.yaml || { red "Failed to encrypt Talos secrets"; exit 1; }
-    green "Talos secrets encrypted in $TALOS_CONFIG_DIR."
+    green "Talos secrets encrypted in $TALOS_DIR."
 
     # Generate Talos configuration files
     blue "Generating Talos configuration files..."
@@ -243,12 +231,12 @@ EOF
 # Step 3: Apply Talos configuration to nodes
 apply_talos_config() {
     blue "Applying Talos configuration to master and worker nodes..."
-    cd "$TALOS_DIR" || exit
+    cd "$TALOS_CONFIG_DIR" || exit
 
     # Apply configuration for each master node
     for i in "${!MASTER_IPS[@]}"; do
         master_ip="${MASTER_IPS[$i]}"
-        config_file="$TALOS_CONFIG_DIR/master-config-$i.yaml"
+        config_file="$TALOS_CONFIG_DIR/master-config-$(printf '%02d' "$i").yaml"
         blue "Applying configuration to master node at $master_ip"
         talosctl apply-config --insecure --nodes "$master_ip" --file "$config_file"
     done
@@ -256,7 +244,7 @@ apply_talos_config() {
     # Apply configuration for each worker node
     for i in "${!WORKER_IPS[@]}"; do
         worker_ip="${WORKER_IPS[$i]}"
-        config_file="$TALOS_CONFIG_DIR/worker-config-$i.yaml"
+        config_file="$TALOS_CONFIG_DIR/worker-config-$(printf '%02d' "$i").yaml"
         blue "Applying configuration to worker node at $worker_ip"
         talosctl apply-config --insecure --nodes "$worker_ip" --file "$config_file"
     done
