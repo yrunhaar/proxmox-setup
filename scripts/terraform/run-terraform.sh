@@ -82,44 +82,51 @@ prompt_for_ip_addresses() {
     green "IP addresses collected for all Master and Worker VMs."
 }
 
-# Function to export Terraform output and assign sequential IPs
+# Prompt user for IP addresses
+prompt_for_ip_addresses() {
+    local master_count=${#MASTER_VMIDS[@]}
+    local worker_count=${#WORKER_VMIDS[@]}
+    MASTER_IPS=()
+    WORKER_IPS=()
+
+    # Prompt for the starting subnet
+    read -p "Enter the IP subnet (Default: 192.168.1): " BASE_SUBNET
+    BASE_SUBNET=${BASE_SUBNET:-"192.168.1"}
+
+    blue "Please enter the last octet of the IP address for each Master and Worker VM based on the subnet $BASE_SUBNET."
+
+    for ((i=0; i<master_count; i++)); do
+        read -p "Enter last octet for Master VM ID ${MASTER_VMIDS[$i]} (MAC: ${MASTER_MACS[$i]}): " last_octet
+        MASTER_IPS+=("$BASE_SUBNET.$last_octet")
+    done
+
+    for ((i=0; i<worker_count; i++)); do
+        read -p "Enter last octet for Worker VM ID ${WORKER_VMIDS[$i]} (MAC: ${WORKER_MACS[$i]}): " last_octet
+        WORKER_IPS+=("$BASE_SUBNET.$last_octet")
+    done
+
+    green "IP addresses collected for all Master and Worker VMs."
+}
+
+# Function to export Terraform output and assign specified IPs
 export_terraform_output() {
     # Capture Terraform output in a local file
     terraform -chdir="$TERRAFORM_DIR" output -json > "$OUTPUT_FILE"
     green "Terraform output saved locally at $OUTPUT_FILE."
 
-    # Prompt for starting IP
-    read -p "Enter the starting IP address for the first master node (e.g., 192.168.1.100): " START_IP
-
-    # Calculate base IP and starting last octet
-    BASE_IP=$(echo "$START_IP" | cut -d '.' -f 1-3)
-    LAST_OCTET=$(echo "$START_IP" | cut -d '.' -f 4)
-
     # Load MAC addresses from the JSON output
     MASTER_MACS=($(jq -r '.master_macaddrs.value[]' "$OUTPUT_FILE"))
     WORKER_MACS=($(jq -r '.worker_macaddrs.value[]' "$OUTPUT_FILE"))
 
-    # Generate IPs for Master VMs
-    MASTER_IPS=()
-    for i in "${!MASTER_MACS[@]}"; do
-        ip="$BASE_IP.$((LAST_OCTET + i))"
-        MASTER_IPS+=("$ip")
-    done
-
-    # Generate IPs for Worker VMs
-    WORKER_IPS=()
-    for i in "${!WORKER_MACS[@]}"; do
-        ip="$BASE_IP.$((LAST_OCTET + ${#MASTER_MACS[@]} + i))"
-        WORKER_IPS+=("$ip")
-    done
+    # Collect IP addresses from user
+    prompt_for_ip_addresses
 
     # Add IP addresses to JSON file in correct format
     jq --argjson master_ips "$(printf '%s\n' "${MASTER_IPS[@]}" | jq -R . | jq -s .)" \
        --argjson worker_ips "$(printf '%s\n' "${WORKER_IPS[@]}" | jq -R . | jq -s .)" \
        '. + {master_ips: $master_ips, worker_ips: $worker_ips}' "$OUTPUT_FILE" > /tmp/temp_output.json && mv /tmp/temp_output.json "$OUTPUT_FILE"
 
-    green "IP addresses automatically assigned for all Master and Worker VMs."
-    green "Combined Terraform output and IP addresses saved locally at $OUTPUT_FILE."
+    green "IP addresses saved in Terraform output file."
 
     # Verify the content of the file before attempting to send it to VM
     if [[ -s "$OUTPUT_FILE" ]]; then
