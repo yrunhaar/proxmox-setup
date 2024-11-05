@@ -140,10 +140,8 @@ export_terraform_output() {
         function transfer_file() {
             local src_file=$1
             local dest_file=$2
-            # Read and encode the file in Base64
-            encoded_content=$(base64 -w 0 "$src_file")
-            # Use pvesh with encoded content
-            pvesh create /nodes/$PROXMOX_NODE/qemu/$VM_ID/agent/file-write --content "$encoded_content" --file "$dest_file" --encoding base64 || { red "Failed to send $src_file to VM"; return 1; }
+            
+            pvesh create /nodes/$PROXMOX_NODE/qemu/$VM_ID/agent/file-write --content "$(cat $src_file)" --file "$dest_file" || { red "Failed to send $src_file to VM"; return 1; }
         }
 
         # Transfer terraform_output.txt
