@@ -11,19 +11,11 @@ NAMESPACE="gitlab-agent"
 GITLAB_AGENT_HELM_REPO="https://charts.gitlab.io"
 GITLAB_KAS_ADDRESS="wss://kas.gitlab.com" # Replace with your GitLab KAS address if self-hosted
 
-# Check for required argument
-if [ -z "$VM_ID" ]; then
-    red "Error: You must provide the VM ID as the first argument."
-    echo "Usage: ./install_gitlab_agent.sh <VM_ID>"
-    exit 1
-fi
-
 # Function to send and execute commands on the remote VM
 send_command_to_vm() {
     local command="$1"
     qm guest exec "$VM_ID" -- bash -c "$command"
 }
-
 
 # Step 1: Prompt for GitLab Agent details
 prompt_gitlab_agent_details() {
