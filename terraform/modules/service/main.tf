@@ -31,4 +31,7 @@ resource "proxmox_lxc" "mattermost" {
     bridge = "vmbr1"
     ip     = "dhcp"
   }
+  # Cloud-Init options
+  ciuser     = "root"
+  cipassword = "password"
 }
