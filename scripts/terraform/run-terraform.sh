@@ -60,26 +60,21 @@ build_terraform() {
     green "Terraform configuration applied successfully!"
 }
 
-# Prompt user for IP addresses
-prompt_for_ip_addresses() {
-    local master_count=${#MASTER_VMIDS[@]}
-    local worker_count=${#WORKER_VMIDS[@]}
-    MASTER_IPS=()
-    WORKER_IPS=()
-
-    blue "Please enter the IP addresses for each master and worker VM by checking DHCP Leases in pfSense GUI."
-
-    for ((i=0; i<master_count; i++)); do
-        read -p "Enter IP address for Master VM ID ${MASTER_VMIDS[$i]} (MAC: ${MASTER_MACS[$i]}): " master_ip
-        MASTER_IPS+=("$master_ip")
-    done
-
-    for ((i=0; i<worker_count; i++)); do
-        read -p "Enter IP address for Worker VM ID ${WORKER_VMIDS[$i]} (MAC: ${WORKER_MACS[$i]}): " worker_ip
-        WORKER_IPS+=("$worker_ip")
-    done
-
-    green "IP addresses collected for all Master and Worker VMs."
+# Load VM IDs and MAC addresses from Terraform output
+load_terraform_output() {
+    if [[ -f "$OUTPUT_FILE" ]]; then
+        blue "Loading values from Terraform output file: $OUTPUT_FILE"
+        
+        MASTER_VMIDS=($(jq -r '.master_vmids.value[]' "$OUTPUT_FILE"))
+        MASTER_MACS=($(jq -r '.master_macaddrs.value[]' "$OUTPUT_FILE"))
+        WORKER_VMIDS=($(jq -r '.worker_vmids.value[]' "$OUTPUT_FILE"))
+        WORKER_MACS=($(jq -r '.worker_macaddrs.value[]' "$OUTPUT_FILE"))
+        
+        green "Loaded VM IDs and MAC addresses from Terraform output."
+    else
+        red "Error: Terraform output file $OUTPUT_FILE not found."
+        exit 1
+    fi
 }
 
 # Prompt user for IP addresses
@@ -95,14 +90,18 @@ prompt_for_ip_addresses() {
 
     blue "Please enter the last octet of the IP address for each Master and Worker VM based on the subnet $BASE_SUBNET."
 
+    # Collect IPs for each Master VM
     for ((i=0; i<master_count; i++)); do
         read -p "Enter last octet for Master VM ID ${MASTER_VMIDS[$i]} (MAC: ${MASTER_MACS[$i]}): " last_octet
         MASTER_IPS+=("$BASE_SUBNET.$last_octet")
+        green "Assigned IP ${MASTER_IPS[-1]} to Master VM ID ${MASTER_VMIDS[$i]}"
     done
 
+    # Collect IPs for each Worker VM
     for ((i=0; i<worker_count; i++)); do
         read -p "Enter last octet for Worker VM ID ${WORKER_VMIDS[$i]} (MAC: ${WORKER_MACS[$i]}): " last_octet
         WORKER_IPS+=("$BASE_SUBNET.$last_octet")
+        green "Assigned IP ${WORKER_IPS[-1]} to Worker VM ID ${WORKER_VMIDS[$i]}"
     done
 
     green "IP addresses collected for all Master and Worker VMs."
@@ -114,11 +113,8 @@ export_terraform_output() {
     terraform -chdir="$TERRAFORM_DIR" output -json > "$OUTPUT_FILE"
     green "Terraform output saved locally at $OUTPUT_FILE."
 
-    # Load MAC addresses from the JSON output
-    MASTER_MACS=($(jq -r '.master_macaddrs.value[]' "$OUTPUT_FILE"))
-    WORKER_MACS=($(jq -r '.worker_macaddrs.value[]' "$OUTPUT_FILE"))
-
     # Collect IP addresses from user
+    load_terraform_output
     prompt_for_ip_addresses
 
     # Add IP addresses to JSON file in correct format
