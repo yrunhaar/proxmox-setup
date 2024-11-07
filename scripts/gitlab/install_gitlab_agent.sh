@@ -20,6 +20,7 @@ send_command_to_vm() {
 # Step 1: Prompt for GitLab Agent details
 prompt_gitlab_agent_details() {
     read -p "Enter QEMU VM ID: " VM_ID
+    read -p "Enter QEMU VM User: " VM_USER
     read -p "Enter GitLab Agent name: " AGENT_NAME
     read -p "Enter GitLab Agent token: " AGENT_TOKEN
 }
@@ -49,7 +50,8 @@ install_gitlab_agent() {
         --namespace $NAMESPACE-$AGENT_NAME \
         --create-namespace \
         --set config.token=$AGENT_TOKEN \
-        --set config.kasAddress=$GITLAB_KAS_ADDRESS"
+        --set config.kasAddress=$GITLAB_KAS_ADDRESS \
+        --kubeconfig /home/$VM_USER/.kube/config"
 
     green "GitLab Agent ($AGENT_NAME) installed in namespace $NAMESPACE on VM $VM_ID."
 }
