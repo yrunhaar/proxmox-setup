@@ -36,6 +36,11 @@ variable "talos_disk_image_id" {
 }
 
 # VM/CT Templates
+variable "debian_ct_template" {
+  description = "Debian CT Template ID"
+  type        = string
+}
+
 variable "mattermost_ct_template" {
   description = "Mattermost CT Template ID"
   type        = string

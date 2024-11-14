@@ -1,0 +1,585 @@
+
+./outputs.tf # Print the file path
+-------------------------------
+# Capture master node IPs
+output "master_vmids" {
+  value = module.kubernetes_vms.master_vmids
+}
+
+
+# Capture master node MAC addresses
+output "master_macaddrs" {
+  value = module.kubernetes_vms.master_macaddrs
+}
+
+# Capture worker node IPs
+output "worker_vmids" {
+  value = module.kubernetes_vms.worker_vmids
+}
+
+# Capture worker node MAC addresses
+output "worker_macaddrs" {
+  value = module.kubernetes_vms.worker_macaddrs
+}
+
+# Talos Version Output
+output "talos_version" {
+  value = var.talos_version
+}
+
+# Talos Image ID Output
+output "talos_disk_image_id"{
+  value = var.talos_disk_image_id
+} # Print file contents as-is
+-------------------------------
+
+
+./main.tf # Print the file path
+-------------------------------
+# main.tf
+terraform {
+    required_version = ">= 0.13.0"
+    required_providers {
+        proxmox = {
+            source = "telmate/proxmox"
+            version = "3.0.1-rc1"
+        }
+    }
+}
+
+provider "proxmox" {
+  pm_api_url          = var.proxmox_api_url
+  pm_api_token_id     = var.proxmox_api_token_id
+  pm_api_token_secret = var.proxmox_api_token_secret
+  pm_tls_insecure     = true
+}
+
+# Importing service VMs (Mattermost, GitLab, etc.)
+module "service_vms" {
+  source       = "./modules/service"
+  vm_id_min    = 200
+  vm_id_max    = 299
+  storage_pool = var.storage_pool
+  target_node  = var.target_node
+  mattermost_ct_template = var.mattermost_ct_template
+
+  providers = {
+    proxmox = proxmox
+  }
+}
+
+# Importing Kubernetes VMs (Talos Control and Worker Nodes)
+module "kubernetes_vms" {
+  source         = "./modules/kubernetes"
+  vm_id_min      = 300
+  vm_id_max      = 399
+  talos_version = var.talos_version
+  storage_pool   = var.storage_pool
+  target_node    = var.target_node
+
+  providers = {
+    proxmox = proxmox
+  }
+}
+
+# Importing database VMs (PostgreSQL, MongoDB, etc.)
+module "database_vms" {
+  source       = "./modules/database"
+  vm_id_min    = 400
+  vm_id_max    = 499
+  storage_pool = var.storage_pool
+  target_node  = var.target_node
+  postgresql_ct_template = var.postgresql_ct_template
+
+  providers = {
+    proxmox = proxmox
+  }
+} # Print file contents as-is
+-------------------------------
+
+
+./modules/database/main.tf # Print the file path
+-------------------------------
+# modules/database/main.tf
+variable "vm_id_min" { type = number }
+variable "vm_id_max" { type = number }
+variable "storage_pool" { type = string }
+variable "target_node" { type = string }
+variable "postgresql_ct_template" { type = string }
+
+terraform {
+  required_providers {
+    proxmox = {
+      source = "telmate/proxmox"
+      version = "3.0.1-rc1"
+    }
+  }
+}
+
+# Define PostgreSQL VM
+resource "proxmox_lxc" "postgresql" {
+  vmid       = var.vm_id_min
+  hostname   = "postgresql"
+  ostemplate = "${var.storage_pool}:vztmpl/${var.postgresql_ct_template}"
+  target_node = var.target_node
+  cores      = 2
+  memory     = 4096
+  rootfs {
+    storage = var.storage_pool
+    size    = "96G"
+  }
+  network {
+    name   = "eth0"
+    bridge = "vmbr1"
+    ip     = "dhcp"
+  }
+  password = "password"
+} # Print file contents as-is
+-------------------------------
+
+
+./modules/network/main.tf # Print the file path
+-------------------------------
+# modules/network/main.tf
+
+variable "vm_id_min" { type = number }
+variable "vm_id_max" { type = number }
+variable "storage_pool" { type = string }
+variable "target_node" { type = string }
+variable "fedora_iso_template" { type = string }
+
+terraform {
+  required_providers {
+    proxmox = {
+      source = "telmate/proxmox"
+      version = "3.0.1-rc1"
+    }
+  }
+}
+
+# Define Fedora VM
+resource "proxmox_vm_qemu" "fedora" {
+  vmid         = var.vm_id_min + 1
+  name         = "fedora"
+  memory       = 4096
+  cores        = 2
+  target_node  = var.target_node
+
+  # Disk configuration
+  disk {
+    size    = "32G"
+    storage = var.storage_pool
+  }
+
+  # Attach the Fedora ISO image
+  cdrom {
+    file    = "${var.storage_pool}:iso/{var.fedora_iso_template}"
+  }
+
+  # Network interface
+  network {
+    model  = "virtio"
+    bridge = "vmbr1"  # MAC will be generated automatically
+    firewall = true
+  }
+} # Print file contents as-is
+-------------------------------
+
+
+./modules/service/main.tf # Print the file path
+-------------------------------
+# modules/service/main.tf
+variable "vm_id_min" { type = number }
+variable "vm_id_max" { type = number }
+variable "storage_pool" { type = string }
+variable "target_node" { type = string }
+variable "mattermost_ct_template" { type = string }
+
+terraform {
+  required_providers {
+    proxmox = {
+      source = "telmate/proxmox"
+      version = "3.0.1-rc1"
+    }
+  }
+}
+
+# Define Mattermost VM
+resource "proxmox_lxc" "mattermost" {
+  vmid       = var.vm_id_min
+  hostname   = "mattermost"
+  ostemplate = "${var.storage_pool}:vztmpl/${var.mattermost_ct_template}"
+  target_node = var.target_node
+  cores      = 2
+  memory     = 4096
+  rootfs {
+    storage = var.storage_pool
+    size    = "16G"
+  }
+  network {
+    name   = "eth0"
+    bridge = "vmbr1"
+    ip     = "dhcp"
+  }
+  password = "password"
+} # Print file contents as-is
+-------------------------------
+
+
+./modules/kubernetes/locals.tf # Print the file path
+-------------------------------
+locals {
+  # Master Node configuration
+  vm_master_nodes = {
+    "0" = {
+      vm_id          = var.vm_id_min
+      node_name      = "talos-master-00"
+      clone_target   = "talos-${var.talos_version}-cloud-init-template"
+      node_cpu_cores = "2"
+      node_memory    = 2048
+      node_disk      = "16" # in GB
+    }
+    "1" = {
+      vm_id          = var.vm_id_min + 1
+      node_name      = "talos-master-01"
+      clone_target   = "talos-${var.talos_version}-cloud-init-template"
+      node_cpu_cores = "2"
+      node_memory    = 2048
+      node_disk      = "16" # in GB
+    }
+    "2" = {
+      vm_id          = var.vm_id_min + 2
+      node_name      = "talos-master-02"
+      clone_target   = "talos-${var.talos_version}-cloud-init-template"
+      node_cpu_cores = "2"
+      node_memory    = 2048
+      node_disk      = "16" # in GB
+    }
+  }
+  # Worker Node configuration
+  vm_worker_nodes = {
+    "0" = {
+      vm_id                = var.vm_id_min + 10
+      node_name            = "talos-worker-00"
+      clone_target         = "talos-${var.talos_version}-cloud-init-template"
+      node_cpu_cores       = "4"
+      node_memory          = 6144
+      node_disk            = "16"
+      additional_node_disk = "32" # for longhorn
+    }
+    "1" = {
+      vm_id                = var.vm_id_min + 11
+      node_name            = "talos-worker-01"
+      clone_target         = "talos-${var.talos_version}-cloud-init-template"
+      node_cpu_cores       = "4"
+      node_memory          = 6144
+      node_disk            = "16"
+      additional_node_disk = "32" # for longhorn
+    }
+    "2" = {
+      vm_id                = var.vm_id_min + 12
+      node_name            = "talos-worker-02"
+      clone_target         = "talos-${var.talos_version}-cloud-init-template"
+      node_cpu_cores       = "4"
+      node_memory          = 6144
+      node_disk            = "16"
+      additional_node_disk = "32" # for longhorn
+    }
+  }
+} # Print file contents as-is
+-------------------------------
+
+
+./modules/kubernetes/main.tf # Print the file path
+-------------------------------
+# modules/kubernetes/main.tf
+variable "vm_id_min" { type = number }
+variable "vm_id_max" { type = number }
+variable "storage_pool" { type = string }
+variable "target_node" { type = string }
+variable "talos_version" { type = string }
+
+terraform {
+  required_providers {
+    proxmox = {
+      source = "telmate/proxmox"
+      version = "3.0.1-rc1"
+    }
+  }
+}
+
+# Dynamically create VMs.
+module "compute_master" {
+  source                   = "./compute-master"
+  target_node              = var.target_node
+  storage_pool             = var.storage_pool
+  nodes                    = local.vm_master_nodes
+
+  providers = {
+    proxmox = proxmox
+  }
+}
+module "compute_worker" {
+  source                   = "./compute-worker"
+  target_node              = var.target_node
+  storage_pool             = var.storage_pool
+  nodes                    = local.vm_worker_nodes
+
+  providers = {
+    proxmox = proxmox
+  }
+}
+
+output "master_vmids" {
+  value = module.compute_master.vmids
+}
+
+output "master_macaddrs" {
+  value = module.compute_master.macaddrs
+}
+
+output "worker_vmids" {
+  value = module.compute_worker.vmids
+}
+
+output "worker_macaddrs" {
+  value = module.compute_worker.macaddrs
+} # Print file contents as-is
+-------------------------------
+
+
+./modules/kubernetes/compute-master/main.tf # Print the file path
+-------------------------------
+# Create a new VM from a clone
+variable "nodes" {}
+variable "storage_pool" { type = string }
+variable "target_node" { type = string }
+
+terraform {
+  required_providers {
+    proxmox = {
+      source = "telmate/proxmox"
+      version = "3.0.1-rc1"
+    }
+  }
+}
+
+resource "proxmox_vm_qemu" "kubernetes_talos" {
+
+    # Dynamic provisioning of multiple nodes
+    count = length(var.nodes)
+
+    # VM General Settings
+    target_node = var.target_node
+    name = var.nodes[count.index].node_name
+    vmid = var.nodes[count.index].vm_id
+
+    # VM Advanced General Settings
+    onboot = true 
+
+    # VM OS Settings
+    clone = var.nodes[count.index].clone_target
+
+    # VM System Settings
+    agent = 0
+    
+    # VM CPU Settings
+    cores = var.nodes[count.index].node_cpu_cores
+    sockets = 1
+    cpu = "host"    
+    
+    # VM Memory Settings
+    memory = var.nodes[count.index].node_memory
+
+    # VM Network Settings
+    network {
+        bridge = "vmbr1"
+        model  = "virtio"
+    }
+
+    # VM Disk Settings
+    scsihw = "virtio-scsi-single"
+    disks {
+        scsi {
+            scsi0 {
+                disk {
+                    size = var.nodes[count.index].node_disk
+                    format    = "raw"
+                    iothread  = true
+                    backup    = false
+                    storage   = var.storage_pool
+                }
+            }
+        }
+    }
+
+    # VM Cloud-Init Settings
+    os_type = "cloud-init"
+    cloudinit_cdrom_storage = var.storage_pool
+}
+
+output "vmids" {
+  value = [for vm in proxmox_vm_qemu.kubernetes_talos : vm.vmid]
+}
+
+output "macaddrs" {
+    value = [for vm in proxmox_vm_qemu.kubernetes_talos : lower(tostring(vm.network[0].macaddr))]
+} # Print file contents as-is
+-------------------------------
+
+
+./modules/kubernetes/compute-worker/main.tf # Print the file path
+-------------------------------
+# Create a new VM from a clone
+variable "nodes" {}
+variable "storage_pool" { type = string }
+variable "target_node" { type = string }
+
+terraform {
+  required_providers {
+    proxmox = {
+      source = "telmate/proxmox"
+      version = "3.0.1-rc1"
+    }
+  }
+}
+
+resource "proxmox_vm_qemu" "kubernetes_talos" {
+
+    # Dynamic provisioning of multiple nodes
+    count = length(var.nodes)
+
+    # VM General Settings
+    target_node = var.target_node
+    name = var.nodes[count.index].node_name
+    vmid = var.nodes[count.index].vm_id
+
+    # VM Advanced General Settings
+    onboot = true
+
+    # VM OS Settings
+    clone = var.nodes[count.index].clone_target
+
+    # VM System Settings
+    agent = 0
+    
+    # VM CPU Settings
+    cores = var.nodes[count.index].node_cpu_cores
+    sockets = 1
+    cpu = "host"    
+    
+    # VM Memory Settings
+    memory = var.nodes[count.index].node_memory
+
+    # VM Network Settings
+    network {
+        bridge = "vmbr1"
+        model  = "virtio"
+    }
+
+    # VM Disk Settings
+    scsihw = "virtio-scsi-single"
+    disks {
+        scsi {
+            scsi0 {
+                disk {
+                    size = var.nodes[count.index].node_disk
+                    format    = "raw"
+                    iothread  = true
+                    backup    = false
+                    storage   = var.storage_pool
+                }
+            }
+            scsi1 {
+                disk {
+                    size = var.nodes[count.index].additional_node_disk
+                    format    = "raw"
+                    iothread  = true
+                    backup    = false
+                    storage   = var.storage_pool
+                }
+            }
+        }
+    }
+
+    # VM Cloud-Init Settings
+    os_type = "cloud-init"
+    cloudinit_cdrom_storage = var.storage_pool
+}
+
+output "vmids" {
+  value = [for vm in proxmox_vm_qemu.kubernetes_talos : vm.vmid]
+}
+
+output "macaddrs" {
+    value = [for vm in proxmox_vm_qemu.kubernetes_talos : lower(tostring(vm.network[0].macaddr))]
+} # Print file contents as-is
+-------------------------------
+
+
+./vars.tf # Print the file path
+-------------------------------
+# vars.tf
+variable "proxmox_api_url" {
+  description = "Proxmox API url address"
+  type        = string
+}
+
+variable "proxmox_api_token_id" {
+  description = "Proxmox API token ID"
+  type        = string
+}
+
+variable "proxmox_api_token_secret" {
+  description = "Proxmox API token secret"
+  type        = string
+}
+
+variable "target_node" {
+  description = "Target Proxmox node for VM deployment"
+  type        = string
+  default     = "pve"
+}
+
+variable "storage_pool" {
+  description = "Default storage pool for VMs"
+  type        = string
+  default     = "local"
+}
+
+variable "talos_version" {
+  description = "Talos version for target clone of packer vm"
+  type        = string
+}
+
+variable "talos_disk_image_id" {
+  type    = string
+}
+
+# VM/CT Templates
+variable "mattermost_ct_template" {
+  description = "Mattermost CT Template ID"
+  type        = string
+}
+
+variable "postgresql_ct_template" {
+  description = "PostgreSQL CT Template ID"
+  type        = string
+}
+
+variable "pfsense_iso_template" {
+  description = "PfSense ISO Template ID"
+  type        = string
+}
+
+variable "fedora_iso_template" {
+  description = "Fedora ISO Template ID"
+  type        = string
+}
+
+variable "ubuntu_server_iso_template" {
+  description = "Ubuntu Server ISO Template ID"
+  type        = string
+} # Print file contents as-is
+-------------------------------
+

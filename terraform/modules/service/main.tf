@@ -3,6 +3,7 @@ variable "vm_id_min" { type = number }
 variable "vm_id_max" { type = number }
 variable "storage_pool" { type = string }
 variable "target_node" { type = string }
+variable "debian_ct_template" { type = string }
 variable "mattermost_ct_template" { type = string }
 
 terraform {
@@ -32,4 +33,32 @@ resource "proxmox_lxc" "mattermost" {
     ip     = "dhcp"
   }
   password = "password"
+}
+
+# Define Bytebase LXC
+resource "proxmox_lxc" "bytebase" {
+  vmid       = var.vm_id_min + 1  # Ensure unique VM ID
+  hostname   = "bytebase"
+  ostemplate = "${var.storage_pool}:vztmpl/${var.debian_ct_template}"
+  target_node = var.target_node
+  cores      = 2
+  memory     = 2048
+  rootfs {
+    storage = var.storage_pool
+    size    = "16G"
+  }
+  network {
+    name   = "eth0"
+    bridge = "vmbr1"
+    ip     = "dhcp"  # Adjust to static IP if needed
+  }
+  password = "password"  # Replace with a secure password
+}
+
+output "bytebase_vmid" {
+  value = proxmox_lxc.bytebase.vmid
+}
+
+output "bytebase_macaddr" {
+  value = proxmox_lxc.bytebase.network[0].macaddr
 }

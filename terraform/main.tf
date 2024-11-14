@@ -23,6 +23,7 @@ module "service_vms" {
   vm_id_max    = 299
   storage_pool = var.storage_pool
   target_node  = var.target_node
+  debian_ct_template = var.debian_ct_template
   mattermost_ct_template = var.mattermost_ct_template
 
   providers = {
