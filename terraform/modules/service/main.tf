@@ -54,11 +54,3 @@ resource "proxmox_lxc" "bytebase" {
   }
   password = "password"  # Replace with a secure password
 }
-
-output "bytebase_vmid" {
-  value = proxmox_lxc.bytebase.vmid
-}
-
-output "bytebase_macaddr" {
-  value = proxmox_lxc.bytebase.network[0].macaddr
-}
