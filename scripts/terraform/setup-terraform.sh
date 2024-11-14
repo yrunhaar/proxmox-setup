@@ -91,6 +91,8 @@ prompt_template_and_image_details() {
   read -p "Enter Talos Disk Image version number (default: v1.8.2): " TALOS_VERSION
   TALOS_VERSION=${TALOS_VERSION:-"v1.8.2"}
 
+  read -p "Enter Debian CT Template ID (default: debian-12-standard_12.7-1_amd64.tar.zst): " DEBIAN_CT_TEMPLATE
+  DEBIAN_CT_TEMPLATE=${DEBIAN_CT_TEMPLATE:-"debian-12-standard_12.7-1_amd64.tar.zst"}
   read -p "Enter Mattermost CT Template ID (default: debian-12-turnkey-mattermost_18.0-1_amd64.tar.gz): " MATTERMOST_CT_TEMPLATE
   MATTERMOST_CT_TEMPLATE=${MATTERMOST_CT_TEMPLATE:-"debian-12-turnkey-mattermost_18.0-1_amd64.tar.gz"}
   read -p "Enter PostgreSQL CT Template ID (default :debian-12-turnkey-postgresql_18.1-1_amd64.tar.gz ): " POSTGRESQL_CT_TEMPLATE
@@ -137,6 +139,7 @@ create_images_tfvars() {
   blue "Creating Terraform images.tfvars..."
 
   cat > $TERRAFORM_DIR/images.tfvars <<EOL
+debian_ct_template       = "$DEBIAN_CT_TEMPLATE"
 mattermost_ct_template   = "$MATTERMOST_CT_TEMPLATE"
 postgresql_ct_template   = "$POSTGRESQL_CT_TEMPLATE"
 pfsense_iso_template     = "$PFSENSE_ISO_TEMPLATE"
