@@ -14,10 +14,10 @@ terraform {
   }
 }
 
-# Define PostgreSQL VM
-resource "proxmox_lxc" "postgresql" {
+# Production Database
+resource "proxmox_lxc" "postgresql_production" {
   vmid       = var.vm_id_min
-  hostname   = "postgresql"
+  hostname   = "postgresql-prod"
   ostemplate = "${var.storage_pool}:vztmpl/${var.postgresql_ct_template}"
   target_node = var.target_node
   cores      = 2
@@ -31,5 +31,25 @@ resource "proxmox_lxc" "postgresql" {
     bridge = "vmbr1"
     ip     = "dhcp"
   }
-  password = "password"
+  password = "prod_password"
+}
+
+# Test Database
+resource "proxmox_lxc" "postgresql_test" {
+  vmid       = var.vm_id_min + 1
+  hostname   = "postgresql-test"
+  ostemplate = "${var.storage_pool}:vztmpl/${var.postgresql_ct_template}"
+  target_node = var.target_node
+  cores      = 1
+  memory     = 2048
+  rootfs {
+    storage = var.storage_pool
+    size    = "32G"
+  }
+  network {
+    name   = "eth0"
+    bridge = "vmbr1"
+    ip     = "dhcp"
+  }
+  password = "test_password"
 }
