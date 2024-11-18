@@ -1,0 +1,1118 @@
+
+./terraform/run-terraform.sh # Print the file path
+-------------------------------
+#!/bin/bash
+
+# Color output functions
+red() { echo -e "[31m$1[0m"; }
+green() { echo -e "[32m$1[0m"; }
+blue() { echo -e "[34m$1[0m"; }
+cyan() { echo -e "[36m$1[0m"; }
+
+# Define paths
+PROXMOX_SETUP_DIR="$HOME/proxmox-setup"
+PACKER_DIR="$PROXMOX_SETUP_DIR/packer/talos-packer"
+PACKER_VAR_FILE="$PACKER_DIR/vars/local.pkrvars.hcl"
+TERRAFORM_DIR="$PROXMOX_SETUP_DIR/terraform"
+TF_PLAN_FILE="$TERRAFORM_DIR/.tfplan"
+OUTPUT_FILE="$PROXMOX_SETUP_DIR/terraform_output.txt"
+
+PACKER_VM_ID="9300"
+
+# Prompt for VM_ID
+read -p "Enter Proxmox Node (default: pve-01): " PROXMOX_NODE
+PROXMOX_NODE=${PROXMOX_NODE:-"pve-01"}
+read -p "Enter the VM ID to send Terraform output (leave blank to save locally only): " VM_ID
+
+# Function to check if VM exists
+check_vm_exists() {
+    local vm_id=$1
+    if qm list | grep -q " $vm_id "; then
+        return 0
+    else
+        red "VM with ID $vm_id does not exist."
+        return 1
+    fi
+}
+
+# Function to build Packer image
+build_packer() {
+    if check_vm_exists "$PACKER_VM_ID"; then
+        green "VM with ID $PACKER_VM_ID already exists. Skipping Packer build."
+        return 0
+    fi
+
+    blue "Building Packer image..."
+
+    # Run Packer commands
+    packer init -upgrade "$PACKER_DIR" || { red "Packer initialization failed"; exit 1; }
+    packer validate -var-file="$PACKER_VAR_FILE" "$PACKER_DIR" || { red "Packer validation failed"; exit 1; }
+    packer build -var-file="$PACKER_VAR_FILE" "$PACKER_DIR" || { red "Packer build failed"; exit 1; }
+
+    green "Packer image built successfully!"
+}
+
+# Function to build Terraform configuration
+build_terraform() {
+    blue "Building Terraform configuration..."
+    
+    terraform -chdir="$TERRAFORM_DIR" init || { red "Terraform initialization failed"; exit 1; }
+    terraform -chdir="$TERRAFORM_DIR" plan -var-file="credentials.auto.tfvars" -var-file="images.tfvars" -out="$TF_PLAN_FILE" || { red "Terraform plan failed"; exit 1; }
+    terraform -chdir="$TERRAFORM_DIR" apply "$TF_PLAN_FILE" || { red "Terraform apply failed"; exit 1; }
+    
+    green "Terraform configuration applied successfully!"
+}
+
+# Load VM IDs and MAC addresses from Terraform output
+load_terraform_output() {
+    if [[ -f "$OUTPUT_FILE" ]]; then
+        blue "Loading values from Terraform output file: $OUTPUT_FILE"
+        
+        MASTER_VMIDS=($(jq -r '.master_vmids.value[]' "$OUTPUT_FILE"))
+        MASTER_MACS=($(jq -r '.master_macaddrs.value[]' "$OUTPUT_FILE"))
+        WORKER_VMIDS=($(jq -r '.worker_vmids.value[]' "$OUTPUT_FILE"))
+        WORKER_MACS=($(jq -r '.worker_macaddrs.value[]' "$OUTPUT_FILE"))
+        
+        green "Loaded VM IDs and MAC addresses from Terraform output."
+    else
+        red "Error: Terraform output file $OUTPUT_FILE not found."
+        exit 1
+    fi
+}
+
+# Prompt user for IP addresses
+prompt_for_ip_addresses() {
+    local master_count=${#MASTER_VMIDS[@]}
+    local worker_count=${#WORKER_VMIDS[@]}
+    MASTER_IPS=()
+    WORKER_IPS=()
+
+    # Prompt for the starting subnet
+    read -p "Enter the IP subnet (Default: 192.168.1): " BASE_SUBNET
+    BASE_SUBNET=${BASE_SUBNET:-"192.168.1"}
+
+    blue "Please enter the last octet of the IP address for each Master and Worker VM based on the subnet $BASE_SUBNET."
+
+    # Collect IPs for each Master VM
+    for ((i=0; i<master_count; i++)); do
+        read -p "Enter last octet for Master VM ID ${MASTER_VMIDS[$i]} (MAC: ${MASTER_MACS[$i]}): " last_octet
+        MASTER_IPS+=("$BASE_SUBNET.$last_octet")
+        green "Assigned IP ${MASTER_IPS[-1]} to Master VM ID ${MASTER_VMIDS[$i]}"
+    done
+
+    # Collect IPs for each Worker VM
+    for ((i=0; i<worker_count; i++)); do
+        read -p "Enter last octet for Worker VM ID ${WORKER_VMIDS[$i]} (MAC: ${WORKER_MACS[$i]}): " last_octet
+        WORKER_IPS+=("$BASE_SUBNET.$last_octet")
+        green "Assigned IP ${WORKER_IPS[-1]} to Worker VM ID ${WORKER_VMIDS[$i]}"
+    done
+
+    green "IP addresses collected for all Master and Worker VMs."
+}
+
+# Function to export Terraform output and assign specified IPs
+export_terraform_output() {
+    # Capture Terraform output in a local file
+    terraform -chdir="$TERRAFORM_DIR" output -json > "$OUTPUT_FILE"
+    green "Terraform output saved locally at $OUTPUT_FILE."
+
+    # Collect IP addresses from user
+    load_terraform_output
+    prompt_for_ip_addresses
+
+    # Add IP addresses to JSON file in correct format
+    jq --argjson master_ips "$(printf '%s
+' "${MASTER_IPS[@]}" | jq -R . | jq -s .)" \
+       --argjson worker_ips "$(printf '%s
+' "${WORKER_IPS[@]}" | jq -R . | jq -s .)" \
+       '. + {master_ips: $master_ips, worker_ips: $worker_ips}' "$OUTPUT_FILE" > /tmp/temp_output.json && mv /tmp/temp_output.json "$OUTPUT_FILE"
+
+    green "IP addresses saved in Terraform output file."
+
+    # Verify the content of the file before attempting to send it to VM
+    if [[ -s "$OUTPUT_FILE" ]]; then
+        green "Output file verified with IP addresses."
+    else
+        red "Output file is empty. Check the process for errors."
+        exit 1
+    fi
+
+    # Check if VM_ID is provided and VM exists
+    if [[ -n "$VM_ID" ]] && check_vm_exists "$VM_ID"; then
+        blue "Sending Terraform output and setup scripts to VM with ID $VM_ID..."
+
+        # Ensure the directories exist on the VM
+        qm guest exec "$VM_ID" -- mkdir -p /tmp/proxmox-setup/scripts || { red "Failed to create directories on VM"; return 1; }
+
+        # Function to transfer a file in one go
+        function transfer_file() {
+            local src_file=$1
+            local dest_file=$2
+            pvesh create /nodes/$PROXMOX_NODE/qemu/$VM_ID/agent/file-write --content "$(cat $src_file)" --file "$dest_file" || { red "Failed to send $src_file to VM"; return 1; }
+        }
+
+        # Transfer terraform_output.txt
+        transfer_file "$OUTPUT_FILE" "/tmp/proxmox-setup/terraform_output.txt"
+
+        # Transfer setup-talos.sh
+        transfer_file "$PROXMOX_SETUP_DIR/scripts/talos/setup-talos.sh" "/tmp/proxmox-setup/scripts/setup-talos.sh"
+
+        # Transfer install-tools.sh
+        transfer_file "$PROXMOX_SETUP_DIR/scripts/setup/install-tools.sh" "/tmp/proxmox-setup/scripts/install-tools.sh"
+
+        green "Terraform output and setup scripts successfully sent to VM with ID $VM_ID."
+    else
+        green "No VM ID provided or VM does not exist. Output saved locally only."
+    fi
+}
+
+# Main function
+main() {
+    build_packer
+    build_terraform
+    export_terraform_output
+}
+
+# Call the main function
+main # Print file contents as-is
+-------------------------------
+
+
+./terraform/setup-terraform.sh # Print the file path
+-------------------------------
+#!/bin/bash
+
+# Color output functions
+red() { echo -e "[31m$1[0m"; }
+green() { echo -e "[32m$1[0m"; }
+blue() { echo -e "[34m$1[0m"; }
+cyan() { echo -e "[36m$1[0m"; }
+
+
+# Define paths
+PROXMOX_SETUP_DIR="$HOME/proxmox-setup"
+PACKER_DIR="$PROXMOX_SETUP_DIR/packer"
+TERRAFORM_DIR="$PROXMOX_SETUP_DIR/terraform"
+
+# Function to provide Proxmox user setup instructions
+setup_proxmox_user_instructions() {
+  cyan "=================================================="
+  cyan "Setting up the necessary user and API token for Terraform in Proxmox"
+  cyan "Follow these steps carefully to ensure Terraform can access Proxmox via API:"
+  cyan ""
+  cyan "1. Create a new user in Proxmox for Terraform"
+  cyan "   Go to: Datacenter > Permissions > Users > Add"
+  cyan "   Set the following values:"
+  cyan "     - User name: terraform-user"
+  cyan "     - Realm: pam (Linux PAM standard authentication)"
+  cyan "     - Expire: never"
+  cyan "     - Enabled: Yes"
+  cyan "   Then click 'Add' to create the user."
+  cyan ""
+  cyan "2. Assign permissions to 'terraform-user'"
+  cyan "   Go to: Datacenter > Permissions > Add"
+  cyan "   Set the following values:"
+  cyan "     - Path: '/' (This grants permissions at the root level)"
+  cyan "     - User: terraform-user@pam"
+  cyan "     - Role: PVEVMAdmin"
+  cyan "   Then click 'Add' to save."
+  cyan ""
+  cyan "3. Generate an API token for 'terraform-user'"
+  cyan "   Go to: Datacenter > Permissions > API Tokens > Add"
+  cyan "   Set the following values:"
+  cyan "     - User: terraform-user@pam"
+  cyan "     - Token ID: terraform-token"
+  cyan "     - Privilege Separation: Uncheck"
+  cyan "     - Expire: never"
+  cyan "   After clicking 'Add', save the generated token. This token will only be visible once, so be sure to copy it!"
+  cyan "=================================================="
+  cyan ""
+}
+
+# Function to prompt for Proxmox details
+prompt_proxmox_details() {
+  read -p "Enter Proxmox Server IP: " PROXMOX_SERVER_IP
+  read -p "Enter Proxmox Token ID (default: terraform-user@pam!terraform-token): " PROXMOX_TOKEN_ID
+  PROXMOX_TOKEN_ID=${PROXMOX_TOKEN_ID:-"terraform-user@pam!terraform-token"}
+  read -p "Enter Proxmox Token Secret: " PROXMOX_TOKEN_SECRET
+  read -p "Enter Proxmox Node (default: pve-01): " PROXMOX_NODE
+  PROXMOX_NODE=${PROXMOX_NODE:-"pve-01"}
+  read -p "Enter the Proxmox Storage Pool (default: local): " STORAGE_POOL
+  STORAGE_POOL=${STORAGE_POOL:-"local"}
+
+  export TF_VAR_proxmox_token_id="$PROXMOX_TOKEN_ID"
+  export TF_VAR_proxmox_token_secret="$PROXMOX_TOKEN_SECRET"
+}
+
+# Function to check or generate SSH key
+generate_ssh_key() {
+  if [[ ! -f ~/.ssh/id_rsa ]]; then
+    blue "Generating SSH key..."
+    ssh-keygen -t rsa -b 2048 -f ~/.ssh/id_rsa -N ""
+    green "SSH key generated at ~/.ssh/id_rsa"
+  else
+    green "SSH key already exists at ~/.ssh/id_rsa"
+  fi
+}
+
+# Function to prompt for template and image details
+prompt_template_and_image_details() {
+  blue "Please provide the following Proxmox templates and images details:"
+
+  read -p "Enter PfSense ISO Template ID (default: netgate-installer-amd64.iso): " PFSENSE_ISO_TEMPLATE
+  PFSENSE_ISO_TEMPLATE=${PFSENSE_ISO_TEMPLATE:-"netgate-installer-amd64.iso"}
+  read -p "Enter Fedora ISO Template ID (default: Fedora-Workstation-Live-x86_64-40-1.14.iso): " FEDORA_ISO_TEMPLATE
+  FEDORA_ISO_TEMPLATE=${FEDORA_ISO_TEMPLATE:-"Fedora-Workstation-Live-x86_64-40-1.14.iso"}
+  read -p "Enter Ubuntu Server ISO Template ID (default: ubuntu-24.04.1-live-server-amd64.iso): " UBUNTU_SERVER_ISO_TEMPLATE
+  UBUNTU_SERVER_ISO_TEMPLATE=${UBUNTU_SERVER_ISO_TEMPLATE:-"ubuntu-24.04.1-live-server-amd64.iso"}
+
+  read -p "Enter Packer Base ISO File (default: archlinux-2024.10.01-x86_64.iso): " BASE_ISO_FILE
+  BASE_ISO_FILE=${BASE_ISO_FILE:-"archlinux-2024.10.01-x86_64.iso"}
+  read -p "Enter Talos Disk Image schematic ID (default: ce4c980550dd2ab1b17bbf2b08801c7eb59418eafe8f279833297925d67c7515): " TALOS_DISK_IMAGE_ID
+  TALOS_DISK_IMAGE_ID=${TALOS_DISK_IMAGE_ID:-"ce4c980550dd2ab1b17bbf2b08801c7eb59418eafe8f279833297925d67c7515"}
+  read -p "Enter Talos Disk Image version number (default: v1.8.2): " TALOS_VERSION
+  TALOS_VERSION=${TALOS_VERSION:-"v1.8.2"}
+
+  read -p "Enter Debian CT Template ID (default: debian-12-standard_12.7-1_amd64.tar.zst): " DEBIAN_CT_TEMPLATE
+  DEBIAN_CT_TEMPLATE=${DEBIAN_CT_TEMPLATE:-"debian-12-standard_12.7-1_amd64.tar.zst"}
+  read -p "Enter Mattermost CT Template ID (default: debian-12-turnkey-mattermost_18.0-1_amd64.tar.gz): " MATTERMOST_CT_TEMPLATE
+  MATTERMOST_CT_TEMPLATE=${MATTERMOST_CT_TEMPLATE:-"debian-12-turnkey-mattermost_18.0-1_amd64.tar.gz"}
+  read -p "Enter PostgreSQL CT Template ID (default :debian-12-turnkey-postgresql_18.1-1_amd64.tar.gz ): " POSTGRESQL_CT_TEMPLATE
+  POSTGRESQL_CT_TEMPLATE=${POSTGRESQL_CT_TEMPLATE:-"debian-12-turnkey-postgresql_18.1-1_amd64.tar.gz"}
+}
+
+# Function to create packer configuration file
+create_packer_configuration() {
+  mkdir -p $PACKER_DIR/talos-packer/vars
+  blue "Creating Packer local.pkrvars.hcl configuration..."
+
+  cat > $PACKER_DIR/talos-packer/vars/local.pkrvars.hcl <<EOL
+proxmox_api_url       = "https://$PROXMOX_SERVER_IP:8006/api2/json"
+proxmox_node          = "$PROXMOX_NODE"
+proxmox_api_token_id  = "$PROXMOX_TOKEN_ID"
+proxmox_api_token_secret = "$PROXMOX_TOKEN_SECRET"
+proxmox_storage       = "$STORAGE_POOL"
+cpu_type              = "host"
+base_iso_file         = "local:iso/$BASE_ISO_FILE"
+talos_version         = "$TALOS_VERSION"
+talos_disk_image_id      = "$TALOS_DISK_IMAGE_ID"
+EOL
+  green "Packer local.pkrvars.hcl created."
+}
+
+# Function to create Terraform credentials file
+create_terraform_credentials() {
+  blue "Creating Terraform credentials.auto.tfvars..."
+
+  cat > $TERRAFORM_DIR/credentials.auto.tfvars <<EOL
+proxmox_api_url          = "https://$PROXMOX_SERVER_IP:8006/api2/json"
+proxmox_api_token_id     = "$PROXMOX_TOKEN_ID"
+proxmox_api_token_secret = "$PROXMOX_TOKEN_SECRET"
+target_node              = "$PROXMOX_NODE"
+storage_pool             = "$STORAGE_POOL"
+talos_version            = "$TALOS_VERSION"
+talos_disk_image_id      = "$TALOS_DISK_IMAGE_ID"
+EOL
+  green "Terraform credentials.auto.tfvars created."
+}
+
+# Function to create images.tfvars for specifying templates
+create_images_tfvars() {
+  blue "Creating Terraform images.tfvars..."
+
+  cat > $TERRAFORM_DIR/images.tfvars <<EOL
+debian_ct_template       = "$DEBIAN_CT_TEMPLATE"
+mattermost_ct_template   = "$MATTERMOST_CT_TEMPLATE"
+postgresql_ct_template   = "$POSTGRESQL_CT_TEMPLATE"
+pfsense_iso_template     = "$PFSENSE_ISO_TEMPLATE"
+fedora_iso_template      = "$FEDORA_ISO_TEMPLATE"
+ubuntu_server_iso_template = "$UBUNTU_SERVER_ISO_TEMPLATE"
+EOL
+  green "Terraform images.tfvars created."
+}
+
+# Main function
+main() {
+  setup_proxmox_user_instructions
+  prompt_proxmox_details
+  generate_ssh_key
+  prompt_template_and_image_details
+  create_packer_configuration
+  create_terraform_credentials
+  create_images_tfvars
+}
+
+# Call the main function
+main # Print file contents as-is
+-------------------------------
+
+
+./talos/setup-talos.sh # Print the file path
+-------------------------------
+#!/bin/bash
+
+# Color output functions for better readability
+red() { echo -e "[31m$1[0m"; }
+green() { echo -e "[32m$1[0m"; }
+blue() { echo -e "[34m$1[0m"; }
+cyan() { echo -e "[36m$1[0m"; }
+
+# Define paths
+OUTPUT_DIR="/tmp/proxmox-setup"
+OUTPUT_FILE="$OUTPUT_DIR/terraform_output.txt"
+
+# Define paths
+TALOS_DIR="$HOME/talos"
+TALOS_CONFIG_DIR="$TALOS_DIR/clusterconfig"
+TALOS_CONFIG_FILE="$HOME/.talos/config"
+METALLB_CONFIG_DIR="$HOME/.metallb"
+KUBE_CONFIG_DIR="$HOME/.kube"
+KUBE_CONFIG_FILE="$KUBE_CONFIG_DIR/config"
+CONFIG_DIR="$HOME/.config"
+SOPS_CONFIG_DIR="$CONFIG_DIR/sops"
+AGE_CONFIG_DIR="$SOPS_CONFIG_DIR/age"
+
+# Function to create directories if they don't exist
+ensure_directories() {
+    local dirs=("$TALOS_DIR" "$TALOS_CONFIG_DIR" "$METALLB_CONFIG_DIR" "$KUBE_CONFIG_DIR" "$CONFIG_DIR" "$SOPS_CONFIG_DIR" "$AGE_CONFIG_DIR")
+
+    for dir in "${dirs[@]}"; do
+        if [[ ! -d "$dir" ]]; then
+            mkdir -p "$dir" && green "Created directory: $dir" || red "Failed to create directory: $dir"
+            chmod -R 700 "$dir" || red "Failed to set permissions for directory: $dir"
+        else
+            blue "Directory already exists: $dir"
+        fi
+    done
+}
+
+# Call the function to ensure directories
+ensure_directories
+
+# Load values from the output file
+if [[ -f "$OUTPUT_FILE" ]]; then
+    MASTER_VMIDS=($(jq -r '.master_vmids.value[]' "$OUTPUT_FILE"))
+    MASTER_MACS=($(jq -r '.master_macaddrs.value[]' "$OUTPUT_FILE"))
+    WORKER_VMIDS=($(jq -r '.worker_vmids.value[]' "$OUTPUT_FILE"))
+    WORKER_MACS=($(jq -r '.worker_macaddrs.value[]' "$OUTPUT_FILE"))
+    MASTER_IPS=($(jq -r '.master_ips[]' "$OUTPUT_FILE"))
+    WORKER_IPS=($(jq -r '.worker_ips[]' "$OUTPUT_FILE"))
+    TALOS_VERSION=$(jq -r '.talos_version.value' "$OUTPUT_FILE")
+    TALOS_DISK_IMAGE_ID=$(jq -r '.talos_disk_image_id.value' "$OUTPUT_FILE")
+
+    blue "Loaded values from $OUTPUT_FILE"
+else
+    red "Error: Output file $OUTPUT_FILE not found."
+    exit 1
+fi
+
+# Display loaded values
+cyan "Master VM IDs: ${MASTER_VMIDS[@]}"
+cyan "Master IPs: ${MASTER_IPS[@]}"
+cyan "Master MACs: ${MASTER_MACS[@]}"
+cyan "Worker VM IDs: ${WORKER_VMIDS[@]}"
+cyan "Worker IPs: ${WORKER_IPS[@]}"
+cyan "Worker MACs: ${WORKER_MACS[@]}"
+cyan "Talos Version: $TALOS_VERSION"
+cyan "Talos Disk Image ID: $TALOS_DISK_IMAGE_ID"
+
+# Step 1: Generate Talos YAML configuration for cluster setup
+generate_talos_yaml_config() {
+    blue "Generating Talos cluster configuration YAML file..."
+
+    cat > "$TALOS_DIR/talconfig.yaml" <<EOF
+# yaml-language-server: \$schema=https://raw.githubusercontent.com/budimanjojo/talhelper/master/pkg/config/schemas/talconfig.json
+---
+talosVersion: "${TALOS_VERSION}"
+kubernetesVersion: "v1.30.0"
+
+clusterName: "cluster-01"
+endpoint: "https://192.168.1.50:6443"
+clusterPodNets:
+  - "10.14.0.0/16"
+clusterSvcNets:
+  - "10.15.0.0/16"
+additionalApiServerCertSans:
+  - "192.168.1.50"
+additionalMachineCertSans:
+  - "192.168.1.50"
+
+nodes:
+  - hostname: "talos-master-00"
+    controlPlane: true
+    ipAddress: "${MASTER_IPS[0]}"
+    installDisk: "/dev/sda"
+    talosImageURL: "factory.talos.dev/installer/${TALOS_DISK_IMAGE_ID}:${TALOS_VERSION}"
+    networkInterfaces:
+      - deviceSelector:
+          hardwareAddr: "${MASTER_MACS[0]}"
+        dhcp: true
+        vip:
+          ip: "192.168.1.50"
+
+  - hostname: "talos-master-01"
+    controlPlane: true
+    ipAddress: "${MASTER_IPS[1]}"
+    installDisk: "/dev/sda"
+    talosImageURL: "factory.talos.dev/installer/${TALOS_DISK_IMAGE_ID}:${TALOS_VERSION}"
+    networkInterfaces:
+      - deviceSelector:
+          hardwareAddr: "${MASTER_MACS[1]}"
+        dhcp: true
+        vip:
+          ip: "192.168.1.50"
+
+  - hostname: "talos-master-02"
+    controlPlane: true
+    ipAddress: "${MASTER_IPS[2]}"
+    installDisk: "/dev/sda"
+    talosImageURL: "factory.talos.dev/installer/${TALOS_DISK_IMAGE_ID}:${TALOS_VERSION}"
+    networkInterfaces:
+      - deviceSelector:
+          hardwareAddr: "${MASTER_MACS[2]}"
+        dhcp: true
+        vip:
+          ip: "192.168.1.50"
+
+  - hostname: "talos-worker-00"
+    controlPlane: false
+    ipAddress: "${WORKER_IPS[0]}"
+    installDisk: "/dev/sda"
+    talosImageURL: "factory.talos.dev/installer/${TALOS_DISK_IMAGE_ID}:${TALOS_VERSION}"
+    networkInterfaces:
+      - deviceSelector:
+          hardwareAddr: "${WORKER_MACS[0]}"
+        dhcp: true
+
+  - hostname: "talos-worker-01"
+    controlPlane: false
+    ipAddress: "${WORKER_IPS[1]}"
+    installDisk: "/dev/sda"
+    talosImageURL: "factory.talos.dev/installer/${TALOS_DISK_IMAGE_ID}:${TALOS_VERSION}"
+    networkInterfaces:
+      - deviceSelector:
+          hardwareAddr: "${WORKER_MACS[1]}"
+        dhcp: true
+
+  - hostname: "talos-worker-02"
+    controlPlane: false
+    ipAddress: "${WORKER_IPS[2]}"
+    installDisk: "/dev/sda"
+    talosImageURL: "factory.talos.dev/installer/${TALOS_DISK_IMAGE_ID}:${TALOS_VERSION}"
+    networkInterfaces:
+      - deviceSelector:
+          hardwareAddr: "${WORKER_MACS[2]}"
+        dhcp: true
+
+controlPlane:
+  patches:
+    - |-
+      cluster:
+        controllerManager:
+          extraArgs:
+            bind-address: "0.0.0.0"
+        scheduler:
+          extraArgs:
+            bind-address: "0.0.0.0"
+
+worker:
+  patches:
+    - |-
+      machine:
+        kubelet:
+          extraMounts:
+            - destination: "/var/mnt/longhorn"
+              type: "bind"
+              source: "/var/mnt/longhorn"
+              options:
+                - "bind"
+                - "rshared"
+                - "rw"
+        disks:
+          - device: "/dev/sdb"
+            partitions:
+              - mountpoint: "/var/mnt/longhorn"
+EOF
+}
+
+
+# Step 2: Generate Talos configuration using Talhelper
+generate_talos_config() {
+    cd "$TALOS_DIR" || exit
+
+    # Generate Talos secret
+    blue "Generating Talos secrets..."
+    talhelper gensecret > talsecret.sops.yaml
+
+    # Set Age key path for sops
+    export SOPS_AGE_KEY_FILE="$AGE_CONFIG_DIR/keys.txt"
+
+    # Create Age secret key for Sops
+    blue "Creating Age secret key..."
+    # Generate Age key with appropriate permissions
+    if age-keygen -o "$AGE_CONFIG_DIR/keys.txt"; then
+        chmod 600 "$AGE_CONFIG_DIR/keys.txt"  # Ensure key file is accessible
+        green "Age key generated and permissions set successfully."
+    else
+        red "Failed to generate Age key."
+        exit 1
+    fi
+
+    # Extract Age keys and format them without quotes
+    AGE_KEY=$(grep -o 'age1.*' $AGE_CONFIG_DIR/keys.txt)
+
+    # Create .sops.yaml configuration for Sops with properly formatted keys
+    cat <<EOF > "$TALOS_DIR/.sops.yaml"
+---
+creation_rules:
+  - age: >-
+      $AGE_KEY
+EOF
+
+    # Encrypt Talos secrets with Age and Sops
+    blue "Encrypting Talos secrets..."
+    sops -e -i talsecret.sops.yaml || { red "Failed to encrypt Talos secrets"; exit 1; }
+    green "Talos secrets encrypted in $TALOS_DIR."
+
+    # Generate Talos configuration files
+    blue "Generating Talos configuration files..."
+    talhelper genconfig
+    green "Talos configuration files generated in $TALOS_CONFIG_DIR."
+}
+
+# Step 3: Apply Talos configuration to nodes
+apply_talos_config() {
+    blue "Applying Talos configuration to master and worker nodes..."
+    cd "$TALOS_CONFIG_DIR" || exit
+
+    # Apply configuration for each master node
+    for i in "${!MASTER_IPS[@]}"; do
+        master_ip="${MASTER_IPS[$i]}"
+        config_file="$TALOS_CONFIG_DIR/cluster-01-talos-master-$(printf '%02d' "$i").yaml"
+        blue "Applying configuration to master node at $master_ip"
+        talosctl apply-config --insecure --nodes "$master_ip" --file "$config_file"
+    done
+
+    # Apply configuration for each worker node
+    for i in "${!WORKER_IPS[@]}"; do
+        worker_ip="${WORKER_IPS[$i]}"
+        config_file="$TALOS_CONFIG_DIR/cluster-01-talos-worker-$(printf '%02d' "$i").yaml"
+        blue "Applying configuration to worker node at $worker_ip"
+        talosctl apply-config --insecure --nodes "$worker_ip" --file "$config_file"
+    done
+
+    green "Configuration applied to all nodes. Waiting for nodes to reboot..."
+    sleep 120  # Adjust this if nodes need more time to reboot
+}
+
+# Step 4: Bootstrap Talos on the cluster
+bootstrap_talos_cluster() {
+    local master_node_ip="${MASTER_IPS[0]}"
+
+    # Set up Talos configuration
+    mkdir -p "$(dirname "$TALOS_CONFIG_FILE")"
+    cp "$TALOS_CONFIG_DIR/talosconfig" "$TALOS_CONFIG_FILE"
+
+    # Run the bootstrap command on the first master node
+    blue "Bootstrapping Talos on master node at IP $master_node_ip"
+    talosctl bootstrap -n "$master_node_ip"
+
+    # Generate kubeconfig for accessing the cluster
+    mkdir -p "$KUBE_CONFIG_DIR"
+    talosctl -n "$master_node_ip" kubeconfig "$KUBE_CONFIG_FILE"
+    green "Kubeconfig saved to $KUBE_CONFIG_FILE"
+
+    green "Configuration applied to all nodes. Waiting for nodes to reboot..."
+    sleep 120  # Adjust this if nodes need more time to reboot
+
+    # Verify node status
+    cyan "Verifying the status of nodes..."
+    kubectl get nodes
+}
+
+# Step 5: Configure MetalLB IP Pool
+configure_metallb() {
+    blue "Configuring MetalLB IP Pool..."
+    cat > "$METALLB_CONFIG_DIR/metallb-values.yaml" <<EOF
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  namespace: metallb-system
+  name: metallb
+data:
+  config: |
+    peers:
+    - peer-address: 192.168.1.1
+      peer-asn: 64512
+      my-asn: 64513
+    address-pools:
+    - name: default
+      protocol: bgp
+      addresses:
+      - 192.168.1.200-192.168.1.255
+EOF
+    green "MetalLB configured."
+}
+
+# Step 6: Install MetalLB as the networking solution
+install_metallb() {
+    blue "Installing MetalLB for Kubernetes networking..."
+    helm repo add metallb https://metallb.github.io/metallb
+    helm repo update
+    kubectl create namespace metallb-system
+    helm install -n metallb-system metallb metallb/metallb -f $METALLB_CONFIG_DIR/metallb-values.yaml
+    kubectl create configmap metallb --from-file=$METALLB_CONFIG_DIR/metallb-values.yaml
+    kubectl apply -f $METALLB_CONFIG_DIR/metallb-values.yaml
+    green "MetalLB installed and configs applied."
+}
+
+# Step 7: Install Longhorn for storage
+install_longhorn() {
+    blue "Installing Longhorn as a storage solution..."
+    helm repo add longhorn https://charts.longhorn.io
+    helm repo update
+    helm install longhorn longhorn/longhorn \
+        --namespace longhorn-system \
+        --create-namespace \
+        --version 1.6.2 \
+        --set defaultSettings.defaultDataPath="/var/mnt/longhorn"
+    green "Longhorn installed. Talos Kubernetes cluster setup is complete!"
+}
+
+# Step 8: Install and Run Theila UI for Talos in Docker
+install_theila() {
+    blue "Running Theila UI for Talos in Docker..."
+
+    # Run Theila as a Docker container in detached mode
+    docker run -d \
+        --rm \
+        --volume ${HOME}/.talos/config:/opt/talosconfig:ro \
+        --env TALOSCONFIG=/opt/talosconfig \
+        --publish 8080:8080 \
+        ghcr.io/siderolabs/theila \
+        --address 0.0.0.0
+
+    green "Theila UI is running in Docker on port 8080 in detached mode."
+}
+
+# Main function with Theila step added
+main() {
+    generate_talos_yaml_config
+    generate_talos_config
+    apply_talos_config
+    bootstrap_talos_cluster
+    configure_metallb
+    install_metallb
+    install_longhorn
+    install_theila
+}
+
+# Execute the main function
+main # Print file contents as-is
+-------------------------------
+
+
+./gitlab/install_gitlab_agent.sh # Print the file path
+-------------------------------
+#!/bin/bash
+
+# Color output functions for better readability
+red() { echo -e "[31m$1[0m"; }
+green() { echo -e "[32m$1[0m"; }
+blue() { echo -e "[34m$1[0m"; }
+cyan() { echo -e "[36m$1[0m"; }
+
+# Configuration variables
+NAMESPACE="gitlab-agent"
+GITLAB_AGENT_HELM_REPO="https://charts.gitlab.io"
+GITLAB_KAS_ADDRESS="wss://kas.gitlab.com" # Replace with your GitLab KAS address if self-hosted
+
+# Function to send and execute commands on the remote VM
+send_command_to_vm() {
+    local command="$1"
+    qm guest exec "$VM_ID" -- bash -c "$command"
+}
+
+# Step 1: Prompt for GitLab Agent details
+prompt_gitlab_agent_details() {
+    read -p "Enter QEMU VM ID: " VM_ID
+    read -p "Enter QEMU VM User: " VM_USER
+    read -p "Enter GitLab Agent name: " AGENT_NAME
+    read -p "Enter GitLab Agent token: " AGENT_TOKEN
+}
+
+# Step 2: Ensure Helm is installed on the VM
+install_helm() {
+    blue "Checking if Helm is installed on VM $VM_ID..."
+    send_command_to_vm "command -v helm" || {
+        blue "Installing Helm on VM $VM_ID..."
+        send_command_to_vm "curl -sSL https://raw.githubusercontent.com/helm/helm/master/scripts/get-helm-3 | bash"
+    }
+    green "Helm is installed on VM $VM_ID."
+}
+
+# Step 3: Add the GitLab Helm repository
+add_gitlab_helm_repo() {
+    blue "Adding GitLab Helm repository on VM $VM_ID..."
+    send_command_to_vm "helm repo add gitlab $GITLAB_AGENT_HELM_REPO && helm repo update"
+    green "GitLab Helm repository added."
+}
+
+# Step 4: Install GitLab Agent in the specified namespace
+install_gitlab_agent() {
+    blue "Installing GitLab Agent ($AGENT_NAME) on VM $VM_ID..."
+
+    send_command_to_vm "helm upgrade --install $AGENT_NAME gitlab/gitlab-agent \
+        --namespace $NAMESPACE-$AGENT_NAME \
+        --create-namespace \
+        --set config.token=$AGENT_TOKEN \
+        --set config.kasAddress=$GITLAB_KAS_ADDRESS \
+        --kubeconfig /home/$VM_USER/.kube/config"
+
+    green "GitLab Agent ($AGENT_NAME) installed in namespace $NAMESPACE on VM $VM_ID."
+}
+
+# Main script
+main() {
+    prompt_gitlab_agent_details
+    install_helm
+    add_gitlab_helm_repo
+    install_gitlab_agent
+}
+
+# Run the main function
+main # Print file contents as-is
+-------------------------------
+
+
+./setup/install-tools.sh # Print the file path
+-------------------------------
+#!/bin/bash
+
+# Color functions for output
+red() { echo -e "[31m$1[0m"; }
+green() { echo -e "[32m$1[0m"; }
+blue() { echo -e "[34m$1[0m"; }
+
+# Install prerequisites
+install_prerequisites() {
+    blue "Installing prerequisites..."
+    sudo apt update
+    sudo apt install -y gnupg software-properties-common curl wget apt-transport-https ca-certificates lsb-release jq
+    green "Prerequisites installed."
+}
+
+# Install Docker
+install_docker() {
+    if ! command -v docker &> /dev/null; then
+        blue "Installing Docker..."
+        sudo apt install -y docker.io
+        sudo systemctl enable --now docker
+        sudo usermod -aG docker $USER
+        docker --version
+        green "Docker installed."
+    else
+        green "Docker is already installed."
+    fi
+}
+
+# Install Packer
+install_packer() {
+    if ! command -v packer &> /dev/null; then
+        blue "Installing Packer..."
+        if [ ! -f /usr/share/keyrings/hashicorp-archive-keyring.gpg ]; then
+            wget -qO- https://apt.releases.hashicorp.com/gpg | sudo gpg --dearmor -o /usr/share/keyrings/hashicorp-archive-keyring.gpg
+        fi
+        echo "deb [signed-by=/usr/share/keyrings/hashicorp-archive-keyring.gpg] https://apt.releases.hashicorp.com $(lsb_release -cs) main" | sudo tee /etc/apt/sources.list.d/hashicorp.list > /dev/null
+        sudo apt update && sudo apt install -y packer
+        packer -v
+        green "Packer installed."
+    else
+        green "Packer is already installed."
+    fi
+}
+
+# Install Terraform
+install_terraform() {
+    if ! command -v terraform &> /dev/null; then
+        blue "Installing Terraform..."
+        if [ ! -f /usr/share/keyrings/hashicorp-archive-keyring.gpg ]; then
+            wget -qO- https://apt.releases.hashicorp.com/gpg | sudo gpg --dearmor -o /usr/share/keyrings/hashicorp-archive-keyring.gpg
+        fi
+        echo "deb [signed-by=/usr/share/keyrings/hashicorp-archive-keyring.gpg] https://apt.releases.hashicorp.com $(lsb_release -cs) main" | sudo tee /etc/apt/sources.list.d/hashicorp.list > /dev/null
+        sudo apt update && sudo apt install -y terraform
+        terraform -v
+        green "Terraform installed."
+    else
+        green "Terraform is already installed."
+    fi
+}
+
+# Install Talosctl
+install_talosctl() {
+    if ! command -v talosctl &> /dev/null; then
+        blue "Installing Talosctl..."
+        curl -sL https://talos.dev/install | sh
+        talosctl version
+        green "Talosctl installed."
+    else
+        green "Talosctl is already installed."
+    fi
+}
+
+# Install Talhelper
+install_talhelper() {
+    if ! command -v talhelper &> /dev/null; then
+        blue "Installing Talhelper..."
+        curl https://i.jpillora.com/budimanjojo/talhelper! | sudo bash
+        talhelper -v
+        green "Talhelper installed."
+    else
+        green "Talhelper is already installed."
+    fi
+}
+
+# Install Kubernetes CLI tools
+install_kubectl() {
+    if ! command -v kubectl &> /dev/null; then
+        blue "Installing kubectl..."
+        curl -LO "https://dl.k8s.io/release/$(curl -L -s https://dl.k8s.io/release/stable.txt)/bin/linux/amd64/kubectl"
+        sudo install -o root -g root -m 0755 kubectl /usr/local/bin/kubectl
+        kubectl version --client
+        green "kubectl installed."
+    else
+        green "kubectl is already installed."
+    fi
+}
+
+# Install SOPS for secrets management
+install_sops() {
+    if ! command -v sops &> /dev/null; then
+        blue "Installing SOPS for secrets management..."
+        curl -LO https://github.com/getsops/sops/releases/download/v3.8.1/sops-v3.8.1.linux.amd64
+        sudo mv sops-v3.8.1.linux.amd64 /usr/local/bin/sops
+        sudo chmod +x /usr/local/bin/sops
+        sops -v
+        green "SOPS installed."
+    else
+        green "SOPS is already installed."
+    fi
+}
+
+# Install Age
+install_age() {
+    if ! command -v age &> /dev/null; then
+        blue "Installing Age..."
+        sudo apt install -y age
+        age -version
+        green "Age installed."
+    else
+        green "Age is already installed."
+    fi
+}
+
+# Install Helm
+install_helm() {
+    if ! command -v helm &> /dev/null; then
+        blue "Installing Helm..."
+        curl https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash
+        helm version
+        green "Helm installed."
+    else
+        green "Helm is already installed."
+    fi
+}
+
+
+# Install Prometheus, Grafana, and Loki (for logging and monitoring)
+install_monitoring_tools() {
+    blue "Installing Prometheus, Grafana, and Loki..."
+    sudo docker pull prom/prometheus
+    sudo docker pull grafana/grafana
+    sudo docker pull grafana/loki
+    green "Monitoring tools installed."
+}
+
+# Main function
+main() {
+    install_prerequisites
+    install_docker
+    install_packer
+    install_terraform
+    install_talosctl
+    install_talhelper
+    install_kubectl
+    install_sops
+    install_age
+    install_helm
+    install_monitoring_tools
+}
+
+# Call the main function
+main # Print file contents as-is
+-------------------------------
+
+
+./setup/setup-network.sh # Print the file path
+-------------------------------
+#!/bin/bash
+
+# Color functions for output
+red() { echo -e "[31m$1[0m"; }
+green() { echo -e "[32m$1[0m"; }
+blue() { echo -e "[34m$1[0m"; }
+
+# Function to prompt for input with a default value
+prompt_input() {
+    local prompt=$1
+    local default=$2
+    read -p "$(blue "$prompt [$default]:") " input
+    echo "${input:-$default}"
+}
+
+# Function to create bridge configuration for each additional IP
+create_bridge_text() {
+    local ip=$1
+    local bridge_id=$2
+    local mac_address=$3
+    local external_bridge_id=$bridge_id
+    local internal_bridge_id=$((bridge_id * 100))
+
+    # WAN bridge configuration with MAC address and public IP
+    local bridge_config="
+auto vmbr${external_bridge_id}
+iface vmbr${external_bridge_id} inet static
+    address ${ip}
+    netmask ${NETMASK}
+    bridge_ports none
+    bridge_stp off
+    bridge_fd 0
+    hwaddress ether ${mac_address}
+#WAN ${external_bridge_id}
+"
+
+    # LAN bridge configuration without an IP, as it's for internal network only
+    bridge_config+="
+auto vmbr${internal_bridge_id}
+iface vmbr${internal_bridge_id} inet manual
+    bridge_ports none
+    bridge_stp off
+    bridge_fd 0
+#LAN ${internal_bridge_id}
+"
+    echo "$bridge_config"
+}
+
+# Step 1: Collect network information
+collect_network_info() {
+    green "Collecting network configuration..."
+    MAINSERVERIP=$(prompt_input "Main server IP" "192.168.0.1")
+    GATEWAYADDRESS=$(prompt_input "Gateway address" "192.168.0.254")
+    NETMASK=$(prompt_input "Netmask" "255.255.255.0")
+    BROADCASTIP=$(prompt_input "Broadcast IP" "192.168.0.255")
+
+    echo ""
+    blue "Note: For Hetzner, ADDITIONAL_IP_ADDRESSES corresponds to the additional IPs listed under your server in the Hetzner Robot Console."
+    blue "MAC_ADDRESSES correspond to the separate MAC addresses associated with each additional IP in the console."
+    echo ""
+    
+    ADD_IP_ADDRESSES=$(prompt_input "Additional IPs (comma-separated)" "")
+    MAC_ADDRESSES=$(prompt_input "MAC addresses for additional IPs (comma-separated)" "")
+    NETWORK_INTERFACE=$(prompt_input "Network interface" "eth0")
+}
+
+# Step 2: Confirm configuration with the user
+confirm_config() {
+    green "You have entered the following configuration:"
+    echo -e "Main server IP: $MAINSERVERIP
+Gateway address: $GATEWAYADDRESS
+Netmask: $NETMASK
+Broadcast IP: $BROADCASTIP
+Additional IPs: $ADD_IP_ADDRESSES
+MAC addresses: $MAC_ADDRESSES
+Network interface: $NETWORK_INTERFACE"
+    read -p "$(blue "Is this correct? [yes/no]:") " confirmation
+    [[ $confirmation != [Yy]* ]] && { red "Exiting without changes."; exit 1; }
+}
+
+# Step 3: Generate routing rules for additional IPs
+generate_additional_routes() {
+    additional_routes=""
+    IFS=',' read -ra ADDR <<<"$ADD_IP_ADDRESSES"
+    for add_ip in "${ADDR[@]}"; do
+        additional_routes+="    up ip route add $add_ip dev ${NETWORK_INTERFACE}
+"
+    done
+}
+
+# Step 4: Generate configuration for /etc/network/interfaces
+generate_interface_content() {
+    green "Generating network interface configuration..."
+    interfaces_content="
+### Hetzner Online GmbH installimage
+
+source /etc/network/interfaces.d/*
+
+auto lo
+iface lo inet loopback
+iface lo inet6 loopback
+
+iface ${NETWORK_INTERFACE} inet manual
+    up ip route add -net ${GATEWAYADDRESS} netmask ${NETMASK} gw ${GATEWAYADDRESS} vmbr0
+    up sysctl -w net.ipv4.ip_forward=1
+    up sysctl -w net.ipv4.conf.${NETWORK_INTERFACE}.send_redirects=0
+    up sysctl -w net.ipv6.conf.all.forwarding=1
+$additional_routes
+    up ip route add 192.168.0.0/16 via ${MAINSERVERIP} dev vmbr0
+    up ip route add 172.16.0.0/12 via ${MAINSERVERIP} dev vmbr0
+    up ip route add 10.0.0.0/8 via ${MAINSERVERIP} dev vmbr0
+
+auto vmbr0
+iface vmbr0 inet static
+    address  ${MAINSERVERIP}
+    netmask  ${NETMASK}
+    gateway  ${GATEWAYADDRESS}
+    broadcast  ${BROADCASTIP}
+    bridge-ports ${NETWORK_INTERFACE}
+    bridge-stp off
+    bridge-fd 0
+    pointopoint ${GATEWAYADDRESS}
+#Main IP configuration
+"
+}
+
+# Step 5: Add additional IP bridges to configuration
+add_additional_bridges() {
+    IFS=',' read -ra ADDR <<<"$ADD_IP_ADDRESSES"
+    IFS=',' read -ra MACS <<<"$MAC_ADDRESSES"
+    
+    for i in "${!ADDR[@]}"; do
+        bridge_id=$((i + 1))
+        interfaces_content+=$(create_bridge_text "${ADDR[i]}" "$bridge_id" "${MACS[i]}")
+    done
+}
+
+# Step 6: Apply the new configuration
+apply_config() {
+    green "Saving configuration to /etc/network/interfaces..."
+    echo "$interfaces_content" > /tmp/new_interfaces
+    timestamp=$(date +%Y%m%d-%H%M%S)
+    mv /etc/network/interfaces /etc/network/interfaces.bak-$timestamp
+    mv /tmp/new_interfaces /etc/network/interfaces
+    green "Network configuration applied. Restart networking with: 'systemctl restart networking'"
+}
+
+# Main function
+main() {
+    collect_network_info
+    confirm_config
+    generate_additional_routes
+    generate_interface_content
+    add_additional_bridges
+    apply_config
+}
+
+# Call the main function
+main # Print file contents as-is
+-------------------------------
+
