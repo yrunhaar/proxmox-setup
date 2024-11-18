@@ -64,6 +64,48 @@ enable_external_connections() {
     green "External connections enabled for PostgreSQL in LXC VM $vm_id."
 }
 
+# Function to configure backups
+configure_backups() {
+    local vm_id=$1
+    blue "Configuring backups for PostgreSQL in LXC VM $vm_id..."
+
+    pct exec $vm_id -- bash -c "
+        mkdir -p $BACKUP_DIR &&
+        chown postgres:postgres $BACKUP_DIR &&
+        echo \\\"0 2 * * * postgres pg_dumpall > $BACKUP_DIR/backup_\$(date +\\\"%Y%m%d_%H%M%S\\\").sql\\\" >> /etc/cron.d/postgresql_backup
+    "
+
+    green "Backups configured for PostgreSQL in LXC VM $vm_id."
+}
+
+# Function to create Proxmox snapshots
+create_snapshot() {
+    local vm_id=$1
+    local snapshot_name=$2
+    blue "Creating snapshot $snapshot_name for LXC VM $vm_id..."
+
+    pct snapshot $vm_id $snapshot_name
+
+    green "Snapshot $snapshot_name created for LXC VM $vm_id."
+}
+
+# Function to save credentials to Bytebase VM
+store_credentials_in_bytebase() {
+    local db_name=$1
+    local user_name=$2
+    local password=$3
+
+    blue "Storing database credentials in Bytebase VM ($BYTEBASE_VM_ID)..."
+    pct exec $BYTEBASE_VM_ID -- bash -c "
+        mkdir -p /var/bytebase &&
+        echo \"Database: $db_name\" >> /var/bytebase/db_credentials.txt &&
+        echo \"User: $user_name\" >> /var/bytebase/db_credentials.txt &&
+        echo \"Password: $password\" >> /var/bytebase/db_credentials.txt &&
+        echo \"---\" >> /var/bytebase/db_credentials.txt
+    "
+    green "Credentials stored successfully in Bytebase VM."
+}
+
 # Function to install CLI tools for cloud providers
 install_cloud_cli() {
     local vm_id=$1
@@ -196,17 +238,39 @@ main() {
     VM_PROD_ID=${VM_PROD_ID:-400}
     read -p "Enter Test Environment VM ID (default: 401): " VM_TEST_ID
     VM_TEST_ID=${VM_TEST_ID:-401}
+    read -p "Enter Bytebase VM ID (default: 201): " BYTEBASE_VM_ID
+    BYTEBASE_VM_ID=${BYTEBASE_VM_ID:-201}
+    read -p "Enter Test Database Name: " TEST_DB
+    read -p "Enter Production Database Name: " PROD_DB
+    read -p "Enter Database User: " DB_USER
+    read -p "Enter Internal Network CIDR (default: 192.168.1.0/24): " NETWORK_CIDR
+    NETWORK_CIDR=${NETWORK_CIDR:-"192.168.1.0/24"}
+
+    # Generate passwords for the test and production databases
+    TEST_PASSWORD=$(generate_password)
+    PROD_PASSWORD=$(generate_password)
 
     # Configure cloud authentication
     cloud_config=$(configure_cloud_authentication)
     IFS=' ' read -r cloud_provider bucket_path credentials_file <<< "$cloud_config"
 
-    # Configure backups and authentication
-    blue "Configuring backups for Test Environment..."
+    # Set up Test Environment
+    blue "Setting up PostgreSQL Test Environment..."
+    install_postgresql $VM_TEST_ID
+    configure_postgresql $VM_TEST_ID $TEST_DB "${DB_USER}_test" "$TEST_PASSWORD"
+    enable_external_connections $VM_TEST_ID "$NETWORK_CIDR"
     configure_backups_and_auth $VM_TEST_ID "$cloud_provider" "$bucket_path" "$credentials_file"
+    create_snapshot $VM_TEST_ID "initial-setup"
+    store_credentials_in_bytebase $TEST_DB "${DB_USER}_test" "$TEST_PASSWORD"
 
-    blue "Configuring backups for Production Environment..."
+    # Set up Production Environment
+    blue "Setting up PostgreSQL Production Environment..."
+    install_postgresql $VM_PROD_ID
+    configure_postgresql $VM_PROD_ID $PROD_DB $DB_USER "$PROD_PASSWORD"
+    enable_external_connections $VM_PROD_ID "$NETWORK_CIDR"
     configure_backups_and_auth $VM_PROD_ID "$cloud_provider" "$bucket_path" "$credentials_file"
+    create_snapshot $VM_PROD_ID "initial-setup"
+    store_credentials_in_bytebase $PROD_DB $DB_USER "$PROD_PASSWORD"
 
     green "PostgreSQL Test and Production Environments are set up successfully with cloud backup and authentication!"
 }
