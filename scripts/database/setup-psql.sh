@@ -117,8 +117,9 @@ install_cloud_cli() {
 configure_backups_and_auth() {
     local vm_id=$1
     local cloud_provider=$2
-    local bucket_path=$3
-    local credentials_file=$4
+    local cloud_command=$3
+    local bucket_path=$4
+    local credentials_file=$5
 
     install_cloud_cli $vm_id $cloud_provider
 
@@ -128,7 +129,7 @@ configure_backups_and_auth() {
         mkdir -p $BACKUP_DIR &&
         chown postgres:postgres $BACKUP_DIR &&
         echo \"0 2 * * * postgres pg_dumpall > $BACKUP_DIR/backup_\$(date +\\\"%Y%m%d_%H%M%S\\\").sql && \\
-        $cloud_provider cp $BACKUP_DIR/backup_\$(date +\\\"%Y%m%d_%H%M%S\\\").sql $bucket_path\" > /etc/cron.d/postgresql_backup
+        $cloud_command $BACKUP_DIR/backup_\$(date +\\\"%Y%m%d_%H%M%S\\\").sql $bucket_path\" > /etc/cron.d/postgresql_backup
     " || { red "Failed to configure backups with cloud integration on VM $vm_id"; exit 1; }
 
     pct push $vm_id "$credentials_file" "$CREDENTIALS_DIR/$(basename "$credentials_file")" || { red "Failed to push credentials to VM $vm_id"; exit 1; }
@@ -145,6 +146,7 @@ configure_cloud_authentication() {
 
     case $choice in
         1)
+            cloud_provider="aws"
             echo "AWS Instructions:"
             echo "- IAM user should have S3FullAccess permissions."
             echo "- Ensure you create a bucket or use an existing one."
@@ -162,6 +164,7 @@ configure_cloud_authentication() {
             green "AWS credentials saved to $credentials_file."
             ;;
         2)
+            cloud_provider="gcp"
             echo "GCS Instructions:"
             echo "- Service account should have 'Storage Admin' role."
             echo "- Download the service account JSON file from the GCP Console."
@@ -173,6 +176,7 @@ configure_cloud_authentication() {
             green "Using GCS service account file: $credentials_file."
             ;;
         3)
+            cloud_provider="azure"
             echo "Azure Instructions:"
             echo "- Storage account should have Blob Contributor role."
             echo "- Generate account name and key from the Azure portal."
@@ -193,7 +197,40 @@ configure_cloud_authentication() {
             ;;
     esac
 
-    echo "$cloud_command $bucket_path $credentials_file"
+    echo "$cloud_provider $cloud_command $bucket_path $credentials_file"
+}
+
+# Function to create Proxmox snapshots with a timestamp
+create_snapshot() {
+    local vm_id=$1
+    local snapshot_name=$2
+
+    # Add timestamp to the snapshot name for uniqueness
+    timestamp=$(date +"%Y%m%d_%H%M%S")
+    snapshot_name="${snapshot_name}_${timestamp}"
+
+    blue "Creating snapshot $snapshot_name for LXC VM $vm_id..."
+
+    pct snapshot $vm_id $snapshot_name
+
+    green "Snapshot $snapshot_name created for LXC VM $vm_id."
+}
+
+# Function to save credentials to Bytebase VM
+store_credentials_in_bytebase() {
+    local db_name=$1
+    local user_name=$2
+    local password=$3
+
+    blue "Storing database credentials in Bytebase VM ($BYTEBASE_VM_ID)..."
+    pct exec $BYTEBASE_VM_ID -- bash -c "
+        mkdir -p /var/bytebase &&
+        echo \"Database: $db_name\" >> /var/bytebase/db_credentials.txt &&
+        echo \"User: $user_name\" >> /var/bytebase/db_credentials.txt &&
+        echo \"Password: $password\" >> /var/bytebase/db_credentials.txt &&
+        echo \"---\" >> /var/bytebase/db_credentials.txt
+    "
+    green "Credentials stored successfully in Bytebase VM."
 }
 
 # Main script
@@ -221,14 +258,14 @@ main() {
     green "2. Google Cloud Storage (GCS)"
     green "3. Azure Blob Storage"
     cloud_config=$(configure_cloud_authentication)
-    IFS=' ' read -r cloud_provider bucket_path credentials_file <<< "$cloud_config"
+    IFS=' ' read -r cloud_provider cloud_command bucket_path credentials_file <<< "$cloud_config"
 
     # Set up Test Environment
     blue "Setting up PostgreSQL Test Environment..."
     install_postgresql $VM_TEST_ID
     configure_postgresql $VM_TEST_ID "${DB_NAME}_test" "${DB_USER}_test" "$TEST_PASSWORD"
     enable_external_connections $VM_TEST_ID "$NETWORK_CIDR"
-    configure_backups_and_auth $VM_TEST_ID "$cloud_provider" "$bucket_path" "$credentials_file"
+    configure_backups_and_auth $VM_TEST_ID "$cloud_provider" "$cloud_command" "$bucket_path" "$credentials_file"
     create_snapshot $VM_TEST_ID "initial-setup"
     store_credentials_in_bytebase "${DB_NAME}_test" "${DB_USER}_test" "$TEST_PASSWORD"
 
@@ -237,7 +274,7 @@ main() {
     install_postgresql $VM_PROD_ID
     configure_postgresql $VM_PROD_ID $DB_NAME $DB_USER "$PROD_PASSWORD"
     enable_external_connections $VM_PROD_ID "$NETWORK_CIDR"
-    configure_backups_and_auth $VM_PROD_ID "$cloud_provider" "$bucket_path" "$credentials_file"
+    configure_backups_and_auth $VM_PROD_ID "$cloud_provider" "$cloud_command" "$bucket_path" "$credentials_file"
     create_snapshot $VM_PROD_ID "initial-setup"
     store_credentials_in_bytebase $DB_NAME $DB_USER "$PROD_PASSWORD"
 
