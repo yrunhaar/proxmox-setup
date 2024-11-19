@@ -25,7 +25,7 @@ install_postgresql() {
         apt install -y postgresql postgresql-contrib &&
         systemctl enable postgresql &&
         systemctl start postgresql
-    "
+    " || { red "Failed to install PostgreSQL on VM $vm_id"; exit 1; }
 
     green "PostgreSQL installed in LXC VM $vm_id."
 }
@@ -39,12 +39,10 @@ configure_postgresql() {
     blue "Configuring PostgreSQL in LXC VM $vm_id for database $db_name..."
 
     pct exec $vm_id -- bash -c "
-        sudo -i -u postgres bash -c \"
-        psql -c \\\"CREATE DATABASE $db_name;\\\" &&
-        psql -c \\\"CREATE USER $user_name WITH PASSWORD '$password';\\\" &&
-        psql -c \\\"GRANT ALL PRIVILEGES ON DATABASE $db_name TO $user_name;\\\"
-        \"
-    "
+        su - postgres -c \"psql -c \\\"CREATE DATABASE $db_name;\\\"\" &&
+        su - postgres -c \"psql -c \\\"CREATE USER $user_name WITH PASSWORD '$password';\\\"\" &&
+        su - postgres -c \"psql -c \\\"GRANT ALL PRIVILEGES ON DATABASE $db_name TO $user_name;\\\"\"
+    " || { red "Failed to configure PostgreSQL on VM $vm_id"; exit 1; }
 
     green "PostgreSQL configured in LXC VM $vm_id for database $db_name."
 }
@@ -56,10 +54,10 @@ enable_external_connections() {
     blue "Enabling external connections for PostgreSQL in LXC VM $vm_id..."
 
     pct exec $vm_id -- bash -c "
-        sed -i \"s/#listen_addresses = 'localhost'/listen_addresses = '*'\" /etc/postgresql/*/main/postgresql.conf &&
-        echo \\\"host all all $network_cidr md5\\\" >> /etc/postgresql/*/main/pg_hba.conf &&
+        sed -i \"s/^#listen_addresses = 'localhost'/listen_addresses = '*'/\" /etc/postgresql/*/main/postgresql.conf &&
+        echo \"host all all $network_cidr md5\" >> /etc/postgresql/*/main/pg_hba.conf &&
         systemctl restart postgresql
-    "
+    " || { red "Failed to enable external connections on VM $vm_id"; exit 1; }
 
     green "External connections enabled for PostgreSQL in LXC VM $vm_id."
 }
@@ -72,38 +70,10 @@ configure_backups() {
     pct exec $vm_id -- bash -c "
         mkdir -p $BACKUP_DIR &&
         chown postgres:postgres $BACKUP_DIR &&
-        echo \\\"0 2 * * * postgres pg_dumpall > $BACKUP_DIR/backup_\$(date +\\\"%Y%m%d_%H%M%S\\\").sql\\\" >> /etc/cron.d/postgresql_backup
-    "
+        echo \"0 2 * * * postgres pg_dumpall > $BACKUP_DIR/backup_\$(date +\\\"%Y%m%d_%H%M%S\\\").sql\" > /etc/cron.d/postgresql_backup
+    " || { red "Failed to configure backups on VM $vm_id"; exit 1; }
 
     green "Backups configured for PostgreSQL in LXC VM $vm_id."
-}
-
-# Function to create Proxmox snapshots
-create_snapshot() {
-    local vm_id=$1
-    local snapshot_name=$2
-    blue "Creating snapshot $snapshot_name for LXC VM $vm_id..."
-
-    pct snapshot $vm_id $snapshot_name
-
-    green "Snapshot $snapshot_name created for LXC VM $vm_id."
-}
-
-# Function to save credentials to Bytebase VM
-store_credentials_in_bytebase() {
-    local db_name=$1
-    local user_name=$2
-    local password=$3
-
-    blue "Storing database credentials in Bytebase VM ($BYTEBASE_VM_ID)..."
-    pct exec $BYTEBASE_VM_ID -- bash -c "
-        mkdir -p /var/bytebase &&
-        echo \"Database: $db_name\" >> /var/bytebase/db_credentials.txt &&
-        echo \"User: $user_name\" >> /var/bytebase/db_credentials.txt &&
-        echo \"Password: $password\" >> /var/bytebase/db_credentials.txt &&
-        echo \"---\" >> /var/bytebase/db_credentials.txt
-    "
-    green "Credentials stored successfully in Bytebase VM."
 }
 
 # Function to install CLI tools for cloud providers
@@ -117,7 +87,7 @@ install_cloud_cli() {
             pct exec $vm_id -- bash -c "
                 apt update &&
                 apt install -y awscli
-            "
+            " || { red "Failed to install AWS CLI on VM $vm_id"; exit 1; }
             green "AWS CLI installed in VM $vm_id."
             ;;
         gcp)
@@ -125,7 +95,7 @@ install_cloud_cli() {
             pct exec $vm_id -- bash -c "
                 apt update &&
                 apt install -y google-cloud-sdk
-            "
+            " || { red "Failed to install Google Cloud SDK on VM $vm_id"; exit 1; }
             green "Google Cloud SDK installed in VM $vm_id."
             ;;
         azure)
@@ -134,7 +104,7 @@ install_cloud_cli() {
                 apt update &&
                 apt install -y curl &&
                 curl -sL https://aka.ms/InstallAzureCLIDeb | bash
-            "
+            " || { red "Failed to install Azure CLI on VM $vm_id"; exit 1; }
             green "Azure CLI installed in VM $vm_id."
             ;;
         *)
@@ -143,7 +113,7 @@ install_cloud_cli() {
     esac
 }
 
-# Function to configure backups and authentication
+# Function to configure backups and cloud integration
 configure_backups_and_auth() {
     local vm_id=$1
     local cloud_provider=$2
@@ -152,19 +122,18 @@ configure_backups_and_auth() {
 
     install_cloud_cli $vm_id $cloud_provider
 
-    blue "Configuring backups for PostgreSQL in LXC VM $vm_id..."
+    blue "Configuring backups for PostgreSQL in LXC VM $vm_id with cloud integration..."
 
     pct exec $vm_id -- bash -c "
         mkdir -p $BACKUP_DIR &&
-        mkdir -p $CREDENTIALS_DIR &&
         chown postgres:postgres $BACKUP_DIR &&
-        echo \\\"0 2 * * * postgres pg_dumpall > $BACKUP_DIR/backup_\$(date +\\\"%Y%m%d_%H%M%S\\\").sql && \\
-        $cloud_provider $bucket_path/backup_\$(date +\\\"%Y%m%d_%H%M%S\\\").sql\\\" > /etc/cron.d/postgresql_backup
-    "
+        echo \"0 2 * * * postgres pg_dumpall > $BACKUP_DIR/backup_\$(date +\\\"%Y%m%d_%H%M%S\\\").sql && \\
+        $cloud_provider cp $BACKUP_DIR/backup_\$(date +\\\"%Y%m%d_%H%M%S\\\").sql $bucket_path\" > /etc/cron.d/postgresql_backup
+    " || { red "Failed to configure backups with cloud integration on VM $vm_id"; exit 1; }
 
-    blue "Copying credentials to VM $vm_id..."
-    pct push $vm_id "$credentials_file" "$CREDENTIALS_DIR/$(basename "$credentials_file")"
-    green "Backups and authentication configured for PostgreSQL in LXC VM $vm_id."
+    pct push $vm_id "$credentials_file" "$CREDENTIALS_DIR/$(basename "$credentials_file")" || { red "Failed to push credentials to VM $vm_id"; exit 1; }
+
+    green "Backups and cloud integration configured for PostgreSQL in LXC VM $vm_id."
 }
 
 # Function to authenticate with cloud provider
@@ -240,8 +209,7 @@ main() {
     VM_TEST_ID=${VM_TEST_ID:-401}
     read -p "Enter Bytebase VM ID (default: 201): " BYTEBASE_VM_ID
     BYTEBASE_VM_ID=${BYTEBASE_VM_ID:-201}
-    read -p "Enter Test Database Name: " TEST_DB
-    read -p "Enter Production Database Name: " PROD_DB
+    read -p "Enter Database Name: " DB_NAME
     read -p "Enter Database User: " DB_USER
     read -p "Enter Internal Network CIDR (default: 192.168.1.0/24): " NETWORK_CIDR
     NETWORK_CIDR=${NETWORK_CIDR:-"192.168.1.0/24"}
@@ -257,20 +225,20 @@ main() {
     # Set up Test Environment
     blue "Setting up PostgreSQL Test Environment..."
     install_postgresql $VM_TEST_ID
-    configure_postgresql $VM_TEST_ID $TEST_DB "${DB_USER}_test" "$TEST_PASSWORD"
+    configure_postgresql $VM_TEST_ID "${DB_NAME}-test" "${DB_USER}-test" "$TEST_PASSWORD"
     enable_external_connections $VM_TEST_ID "$NETWORK_CIDR"
     configure_backups_and_auth $VM_TEST_ID "$cloud_provider" "$bucket_path" "$credentials_file"
     create_snapshot $VM_TEST_ID "initial-setup"
-    store_credentials_in_bytebase $TEST_DB "${DB_USER}_test" "$TEST_PASSWORD"
+    store_credentials_in_bytebase "${DB_NAME}-test" "${DB_USER}-test" "$TEST_PASSWORD"
 
     # Set up Production Environment
     blue "Setting up PostgreSQL Production Environment..."
     install_postgresql $VM_PROD_ID
-    configure_postgresql $VM_PROD_ID $PROD_DB $DB_USER "$PROD_PASSWORD"
+    configure_postgresql $VM_PROD_ID $DB_NAME $DB_USER "$PROD_PASSWORD"
     enable_external_connections $VM_PROD_ID "$NETWORK_CIDR"
     configure_backups_and_auth $VM_PROD_ID "$cloud_provider" "$bucket_path" "$credentials_file"
     create_snapshot $VM_PROD_ID "initial-setup"
-    store_credentials_in_bytebase $PROD_DB $DB_USER "$PROD_PASSWORD"
+    store_credentials_in_bytebase $DB_NAME $DB_USER "$PROD_PASSWORD"
 
     green "PostgreSQL Test and Production Environments are set up successfully with cloud backup and authentication!"
 }
