@@ -138,10 +138,6 @@ configure_backups_and_auth() {
 
 # Function to authenticate with cloud provider
 configure_cloud_authentication() {
-    green "Choose your cloud storage provider:"
-    echo "1. Amazon S3 (AWS)"
-    echo "2. Google Cloud Storage (GCS)"
-    echo "3. Azure Blob Storage"
     read -p "Enter the number corresponding to your choice: " choice
 
     local credentials_file
@@ -219,17 +215,22 @@ main() {
     PROD_PASSWORD=$(generate_password)
 
     # Configure cloud authentication
+    blue "Configuring cloud authentication for PostgreSQL backups..."
+    green "Choose your cloud storage provider:"
+    green "1. Amazon S3 (AWS)"
+    green "2. Google Cloud Storage (GCS)"
+    green "3. Azure Blob Storage"
     cloud_config=$(configure_cloud_authentication)
     IFS=' ' read -r cloud_provider bucket_path credentials_file <<< "$cloud_config"
 
     # Set up Test Environment
     blue "Setting up PostgreSQL Test Environment..."
     install_postgresql $VM_TEST_ID
-    configure_postgresql $VM_TEST_ID "${DB_NAME}-test" "${DB_USER}-test" "$TEST_PASSWORD"
+    configure_postgresql $VM_TEST_ID "${DB_NAME}_test" "${DB_USER}_test" "$TEST_PASSWORD"
     enable_external_connections $VM_TEST_ID "$NETWORK_CIDR"
     configure_backups_and_auth $VM_TEST_ID "$cloud_provider" "$bucket_path" "$credentials_file"
     create_snapshot $VM_TEST_ID "initial-setup"
-    store_credentials_in_bytebase "${DB_NAME}-test" "${DB_USER}-test" "$TEST_PASSWORD"
+    store_credentials_in_bytebase "${DB_NAME}_test" "${DB_USER}_test" "$TEST_PASSWORD"
 
     # Set up Production Environment
     blue "Setting up PostgreSQL Production Environment..."
