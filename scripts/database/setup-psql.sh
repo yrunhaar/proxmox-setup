@@ -10,6 +10,12 @@ cyan() { echo -e "\033[36m$1\033[0m"; }
 BACKUP_DIR="/var/backups/postgresql"
 CREDENTIALS_DIR="/var/credentials"
 
+# Globals for cloud
+CLOUD_PROVIDER=""
+CLOUD_COMMAND=""
+BUCKET_PATH=""
+CREDENTIALS_FILE=""
+
 # Function to generate a random secure password
 generate_password() {
     openssl rand -base64 16
@@ -62,20 +68,6 @@ enable_external_connections() {
     green "External connections enabled for PostgreSQL in LXC VM $vm_id."
 }
 
-# Function to configure backups
-configure_backups() {
-    local vm_id=$1
-    blue "Configuring backups for PostgreSQL in LXC VM $vm_id..."
-
-    pct exec $vm_id -- bash -c "
-        mkdir -p $BACKUP_DIR &&
-        chown postgres:postgres $BACKUP_DIR &&
-        echo \"0 2 * * * postgres pg_dumpall > $BACKUP_DIR/backup_\$(date +\\\"%Y%m%d_%H%M%S\\\").sql\" > /etc/cron.d/postgresql_backup
-    " || { red "Failed to configure backups on VM $vm_id"; exit 1; }
-
-    green "Backups configured for PostgreSQL in LXC VM $vm_id."
-}
-
 # Function to install CLI tools for cloud providers
 install_cloud_cli() {
     local vm_id=$1
@@ -86,31 +78,29 @@ install_cloud_cli() {
         apt update &&
         apt install -y apt-transport-https ca-certificates gnupg curl
     " || { red "Failed to install prerequisites on VM $vm_id"; exit 1; }
-    green "prerequisites installed in VM $vm_id."
+    green "Prerequisites installed in VM $vm_id."
 
     case $cloud_provider in
         aws)
             blue "Installing AWS CLI in VM $vm_id..."
-            pct exec $vm_id -- bash -c "
-                apt install -y awscli
-            " || { red "Failed to install AWS CLI on VM $vm_id"; exit 1; }
+            pct exec $vm_id -- bash -c "apt install -y awscli" || { red "Failed to install AWS CLI on VM $vm_id"; exit 1; }
             green "AWS CLI installed in VM $vm_id."
             ;;
         gcp)
             blue "Installing Google Cloud SDK in VM $vm_id..."
             pct exec $vm_id -- bash -c "
-                echo \"deb [signed-by=/usr/share/keyrings/cloud.google.gpg] https://packages.cloud.google.com/apt cloud-sdk main\" | tee -a /etc/apt/sources.list.d/google-cloud-sdk.list &&
-                curl https://packages.cloud.google.com/apt/doc/apt-key.gpg | gpg --dearmor -o /usr/share/keyrings/cloud.google.gpg &&
-                apt update &&
+                if [ ! -f /etc/apt/sources.list.d/google-cloud-sdk.list ]; then
+                    echo \"deb [signed-by=/usr/share/keyrings/cloud.google.gpg] https://packages.cloud.google.com/apt cloud-sdk main\" | tee /etc/apt/sources.list.d/google-cloud-sdk.list
+                    curl https://packages.cloud.google.com/apt/doc/apt-key.gpg | gpg --dearmor -o /usr/share/keyrings/cloud.google.gpg
+                    apt update
+                fi
                 apt install -y google-cloud-cli
             " || { red "Failed to install Google Cloud SDK on VM $vm_id"; exit 1; }
             green "Google Cloud SDK installed in VM $vm_id."
             ;;
         azure)
             blue "Installing Azure CLI in VM $vm_id..."
-            pct exec $vm_id -- bash -c "
-                curl -sL https://aka.ms/InstallAzureCLIDeb | bash
-            " || { red "Failed to install Azure CLI on VM $vm_id"; exit 1; }
+            pct exec $vm_id -- bash -c "curl -sL https://aka.ms/InstallAzureCLIDeb | bash" || { red "Failed to install Azure CLI on VM $vm_id"; exit 1; }
             green "Azure CLI installed in VM $vm_id."
             ;;
         *)
@@ -122,103 +112,116 @@ install_cloud_cli() {
 # Function to configure backups and cloud integration
 configure_backups_and_auth() {
     local vm_id=$1
-    local cloud_provider=$2
-    local cloud_command=$3
-    local bucket_path=$4
-    local credentials_file=$5
+    local db_name=$2
 
-    install_cloud_cli $vm_id $cloud_provider
+    install_cloud_cli $vm_id $CLOUD_PROVIDER
 
     blue "Configuring backups for PostgreSQL in LXC VM $vm_id with cloud integration..."
+
+    # Ensure credentials directory exists in LXC before pushing
+    pct exec $vm_id -- mkdir -p $CREDENTIALS_DIR
+
+    blue "Pushing credential file, $CREDENTIALS_FILE :"
+    pct push $vm_id "$CREDENTIALS_FILE" "$CREDENTIALS_DIR/$(basename "$CREDENTIALS_FILE")" || { red "Failed to push credentials to VM $vm_id"; exit 1; }
+    green "Credential file stored in LXC VM $vm_id."
+
+    # Backup filename contains vm_id and db_name for traceability
+    local backup_file="backup_\$(date +\\\"%Y%m%d_%H%M%S\\\")_vm${vm_id}_${db_name}.sql"
+
+    # Compose cloud upload command
+    local upload_cmd=""
+    case $CLOUD_PROVIDER in
+        aws)
+            upload_cmd="$CLOUD_COMMAND $BACKUP_DIR/$backup_file $BUCKET_PATH/"
+            ;;
+        gcp)
+            upload_cmd="GOOGLE_APPLICATION_CREDENTIALS=$CREDENTIALS_DIR/$(basename "$CREDENTIALS_FILE") $CLOUD_COMMAND $BACKUP_DIR/$backup_file $BUCKET_PATH/"
+            ;;
+        azure)
+            upload_cmd="$CLOUD_COMMAND --file $BACKUP_DIR/$backup_file --container-name $(basename $BUCKET_PATH) --name $backup_file"
+            ;;
+    esac
 
     pct exec $vm_id -- bash -c "
         mkdir -p $BACKUP_DIR &&
         chown postgres:postgres $BACKUP_DIR &&
-        echo \"0 2 * * * postgres pg_dumpall > $BACKUP_DIR/backup_\$(date +\\\"%Y%m%d_%H%M%S\\\").sql && \\
-        $cloud_command $BACKUP_DIR/backup_\$(date +\\\"%Y%m%d_%H%M%S\\\").sql $bucket_path\" > /etc/cron.d/postgresql_backup
+        echo \"0 2 * * * postgres pg_dumpall > $BACKUP_DIR/$backup_file && $upload_cmd\" > /etc/cron.d/postgresql_backup
     " || { red "Failed to configure backups with cloud integration on VM $vm_id"; exit 1; }
-
-    pct push $vm_id "$credentials_file" "$CREDENTIALS_DIR/$(basename "$credentials_file")" || { red "Failed to push credentials to VM $vm_id"; exit 1; }
 
     green "Backups and cloud integration configured for PostgreSQL in LXC VM $vm_id."
 }
 
-# Function to authenticate with cloud provider
+# Function to authenticate with cloud provider (sets globals)
 configure_cloud_authentication() {
     read -p "Enter the number corresponding to your choice: " choice
 
-    local credentials_file
-    local cloud_command
-
     case $choice in
         1)
-            cloud_provider="aws"
+            CLOUD_PROVIDER="aws"
             blue "AWS Instructions:" >&2
             blue "- IAM user should have S3FullAccess permissions." >&2
             blue "- Ensure you create a bucket or use an existing one." >&2
             blue "- Generate Access Key ID and Secret Access Key." >&2
-            read -p "Enter your AWS S3 bucket path (e.g., s3://my-bucket/path): " bucket_path
+            read -p "Enter your AWS S3 bucket path (e.g., s3://my-bucket/path): " BUCKET_PATH
             read -p "Enter AWS Access Key ID: " aws_access_key
             read -p "Enter AWS Secret Access Key: " aws_secret_key
-            credentials_file="$CREDENTIALS_DIR/aws_credentials"
+            CREDENTIALS_FILE="$CREDENTIALS_DIR/aws_credentials"
 
-            green "[default]" > "$credentials_file" >&2
-            green "aws_access_key_id = $aws_access_key" >> "$credentials_file" >&2
-            green "aws_secret_access_key = $aws_secret_key" >> "$credentials_file"  >&2
-            cloud_command="aws s3 cp --profile default"
+            echo "[default]" > "$CREDENTIALS_FILE"
+            echo "aws_access_key_id = $aws_access_key" >> "$CREDENTIALS_FILE"
+            echo "aws_secret_access_key = $aws_secret_key" >> "$CREDENTIALS_FILE"
+            CLOUD_COMMAND="aws s3 cp --profile default"
 
-            green "AWS credentials saved to $credentials_file." >&2
+            green "AWS credentials saved to $CREDENTIALS_FILE." >&2
             ;;
         2)
-            cloud_provider="gcp"
+            CLOUD_PROVIDER="gcp"
             blue "GCS Instructions:" >&2
             blue "- Service account should have 'Storage Admin' role." >&2
             blue "- Download the service account JSON file from the GCP Console." >&2
-            read -p "Enter your GCS bucket path (e.g., gs://my-bucket/path): " bucket_path
-            read -p "Enter the path to your GCS service account key JSON file: " service_account_path
-            credentials_file="$service_account_path"
-            cloud_command="gsutil cp"
-
-            green "Using GCS service account file: $credentials_file." >&2
+            read -p "Enter your GCS bucket path (e.g., gs://my-bucket/path): " BUCKET_PATH
+            read -p "Enter the path to your GCS service account key JSON file (e.g. /root/credentials.json): " CREDENTIALS_FILE
+            # Expand ~ to full path
+            CREDENTIALS_FILE=$(eval echo "$CREDENTIALS_FILE")
+            if [ ! -f "$CREDENTIALS_FILE" ]; then
+                red "Credential file $CREDENTIALS_FILE does not exist!"
+                exit 1
+            fi
+            chmod 600 "$CREDENTIALS_FILE"
+            CLOUD_COMMAND="gsutil cp"
+            green "Using GCS service account file: $CREDENTIALS_FILE." >&2
             ;;
         3)
-            cloud_provider="azure"
+            CLOUD_PROVIDER="azure"
             blue "Azure Instructions:" >&2
             blue "- Storage account should have Blob Contributor role." >&2
             blue "- Generate account name and key from the Azure portal." >&2
-            read -p "Enter your Azure blob path (e.g., az://my-container/path): " bucket_path
+            read -p "Enter your Azure blob path (e.g., az://my-container/path): " BUCKET_PATH
             read -p "Enter Azure Storage Account Name: " azure_account_name
             read -p "Enter Azure Storage Account Key: " azure_account_key
-            credentials_file="$CREDENTIALS_DIR/azure_credentials"
+            CREDENTIALS_FILE="$CREDENTIALS_DIR/azure_credentials"
 
-            green "accountName=$azure_account_name" > "$credentials_file" >&2
-            green "accountKey=$azure_account_key" >> "$credentials_file" >&2
-            cloud_command="az storage blob upload --account-name $azure_account_name --account-key $azure_account_key"
-
-            green "Azure credentials saved to $credentials_file." >&2
+            echo "accountName=$azure_account_name" > "$CREDENTIALS_FILE"
+            echo "accountKey=$azure_account_key" >> "$CREDENTIALS_FILE"
+            CLOUD_COMMAND="az storage blob upload --account-name $azure_account_name --account-key $azure_account_key"
+            green "Azure credentials saved to $CREDENTIALS_FILE." >&2
             ;;
         *)
             red "Invalid choice. Exiting..." >&2
             exit 1
             ;;
     esac
-
-    echo "$cloud_provider $cloud_command $bucket_path $credentials_file"
 }
 
 # Function to create Proxmox snapshots with a timestamp
 create_snapshot() {
     local vm_id=$1
     local snapshot_name=$2
-
-    # Add timestamp to the snapshot name for uniqueness
     timestamp=$(date +"%Y%m%d_%H%M%S")
     snapshot_name="${snapshot_name}_${timestamp}"
 
     blue "Creating snapshot $snapshot_name for LXC VM $vm_id..."
-
     pct snapshot $vm_id $snapshot_name
-
     green "Snapshot $snapshot_name created for LXC VM $vm_id."
 }
 
@@ -263,15 +266,14 @@ main() {
     green "1. Amazon S3 (AWS)"
     green "2. Google Cloud Storage"
     green "3. Azure Blob Storage"
-    cloud_config=$(configure_cloud_authentication)
-    IFS=' ' read -r cloud_provider cloud_command bucket_path credentials_file <<< "$cloud_config"
+    configure_cloud_authentication
 
     # Set up Test Environment
     blue "Setting up PostgreSQL Test Environment..."
     install_postgresql $VM_TEST_ID
     configure_postgresql $VM_TEST_ID "${DB_NAME}_test" "${DB_USER}_test" "$TEST_PASSWORD"
     enable_external_connections $VM_TEST_ID "$NETWORK_CIDR"
-    configure_backups_and_auth $VM_TEST_ID "$cloud_provider" "$cloud_command" "$bucket_path" "$credentials_file"
+    configure_backups_and_auth $VM_TEST_ID "${DB_NAME}_test"
     create_snapshot $VM_TEST_ID "initial-setup"
     store_credentials_in_bytebase "${DB_NAME}_test" "${DB_USER}_test" "$TEST_PASSWORD"
 
@@ -280,7 +282,7 @@ main() {
     install_postgresql $VM_PROD_ID
     configure_postgresql $VM_PROD_ID $DB_NAME $DB_USER "$PROD_PASSWORD"
     enable_external_connections $VM_PROD_ID "$NETWORK_CIDR"
-    configure_backups_and_auth $VM_PROD_ID "$cloud_provider" "$cloud_command" "$bucket_path" "$credentials_file"
+    configure_backups_and_auth $VM_PROD_ID "$DB_NAME"
     create_snapshot $VM_PROD_ID "initial-setup"
     store_credentials_in_bytebase $DB_NAME $DB_USER "$PROD_PASSWORD"
 
