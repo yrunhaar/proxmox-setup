@@ -39,12 +39,12 @@ configure_postgresql() {
     blue "Configuring PostgreSQL in LXC VM $vm_id for database $db_name..."
 
     pct exec $vm_id -- bash -c "
-        su - postgres -c \"psql -c \\\"CREATE DATABASE $db_name;\\\"\" &&
         su - postgres -c \"psql -c \\\"CREATE USER $user_name WITH PASSWORD '$password';\\\"\" &&
+        su - postgres -c \"psql -c \\\"CREATE DATABASE $db_name OWNER $user_name;\\\"\" &&
         su - postgres -c \"psql -c \\\"GRANT ALL PRIVILEGES ON DATABASE $db_name TO $user_name;\\\"\"
     " || { red "Failed to configure PostgreSQL on VM $vm_id"; exit 1; }
 
-    green "PostgreSQL configured in LXC VM $vm_id for database $db_name."
+    green "PostgreSQL configured in LXC VM $vm_id for database $db_name with user $user_name as owner."
 }
 
 # Function to enable external connections
@@ -147,52 +147,52 @@ configure_cloud_authentication() {
     case $choice in
         1)
             cloud_provider="aws"
-            echo "AWS Instructions:"
-            echo "- IAM user should have S3FullAccess permissions."
-            echo "- Ensure you create a bucket or use an existing one."
-            echo "- Generate Access Key ID and Secret Access Key."
+            blue "AWS Instructions:" >&2
+            blue "- IAM user should have S3FullAccess permissions." >&2
+            blue "- Ensure you create a bucket or use an existing one." >&2
+            blue "- Generate Access Key ID and Secret Access Key." >&2
             read -p "Enter your AWS S3 bucket path (e.g., s3://my-bucket/path): " bucket_path
             read -p "Enter AWS Access Key ID: " aws_access_key
             read -p "Enter AWS Secret Access Key: " aws_secret_key
             credentials_file="$CREDENTIALS_DIR/aws_credentials"
 
-            echo "[default]" > "$credentials_file"
-            echo "aws_access_key_id = $aws_access_key" >> "$credentials_file"
-            echo "aws_secret_access_key = $aws_secret_key" >> "$credentials_file"
+            green "[default]" > "$credentials_file" >&2
+            green "aws_access_key_id = $aws_access_key" >> "$credentials_file" >&2
+            green "aws_secret_access_key = $aws_secret_key" >> "$credentials_file"  >&2
             cloud_command="aws s3 cp --profile default"
 
-            green "AWS credentials saved to $credentials_file."
+            green "AWS credentials saved to $credentials_file." >&2
             ;;
         2)
             cloud_provider="gcp"
-            echo "GCS Instructions:"
-            echo "- Service account should have 'Storage Admin' role."
-            echo "- Download the service account JSON file from the GCP Console."
+            blue "GCS Instructions:" >&2
+            blue "- Service account should have 'Storage Admin' role." >&2
+            blue "- Download the service account JSON file from the GCP Console." >&2
             read -p "Enter your GCS bucket path (e.g., gs://my-bucket/path): " bucket_path
             read -p "Enter the path to your GCS service account key JSON file: " service_account_path
             credentials_file="$service_account_path"
             cloud_command="gsutil cp"
 
-            green "Using GCS service account file: $credentials_file."
+            green "Using GCS service account file: $credentials_file." >&2
             ;;
         3)
             cloud_provider="azure"
-            echo "Azure Instructions:"
-            echo "- Storage account should have Blob Contributor role."
-            echo "- Generate account name and key from the Azure portal."
+            blue "Azure Instructions:" >&2
+            blue "- Storage account should have Blob Contributor role." >&2
+            blue "- Generate account name and key from the Azure portal." >&2
             read -p "Enter your Azure blob path (e.g., az://my-container/path): " bucket_path
             read -p "Enter Azure Storage Account Name: " azure_account_name
             read -p "Enter Azure Storage Account Key: " azure_account_key
             credentials_file="$CREDENTIALS_DIR/azure_credentials"
 
-            echo "accountName=$azure_account_name" > "$credentials_file"
-            echo "accountKey=$azure_account_key" >> "$credentials_file"
+            green "accountName=$azure_account_name" > "$credentials_file" >&2
+            green "accountKey=$azure_account_key" >> "$credentials_file" >&2
             cloud_command="az storage blob upload --account-name $azure_account_name --account-key $azure_account_key"
 
-            green "Azure credentials saved to $credentials_file."
+            green "Azure credentials saved to $credentials_file." >&2
             ;;
         *)
-            red "Invalid choice. Exiting..."
+            red "Invalid choice. Exiting..." >&2
             exit 1
             ;;
     esac
@@ -255,15 +255,15 @@ main() {
     blue "Configuring cloud authentication for PostgreSQL backups..."
     green "Choose your cloud storage provider:"
     green "1. Amazon S3 (AWS)"
-    green "2. Google Cloud Storage (GCS)"
+    green "2. Google Cloud Storage"
     green "3. Azure Blob Storage"
     cloud_config=$(configure_cloud_authentication)
     IFS=' ' read -r cloud_provider cloud_command bucket_path credentials_file <<< "$cloud_config"
 
     # Set up Test Environment
     blue "Setting up PostgreSQL Test Environment..."
-    install_postgresql $VM_TEST_ID
-    configure_postgresql $VM_TEST_ID "${DB_NAME}_test" "${DB_USER}_test" "$TEST_PASSWORD"
+#    install_postgresql $VM_TEST_ID
+#    configure_postgresql $VM_TEST_ID "${DB_NAME}_test" "${DB_USER}_test" "$TEST_PASSWORD"
     enable_external_connections $VM_TEST_ID "$NETWORK_CIDR"
     configure_backups_and_auth $VM_TEST_ID "$cloud_provider" "$cloud_command" "$bucket_path" "$credentials_file"
     create_snapshot $VM_TEST_ID "initial-setup"
@@ -271,8 +271,8 @@ main() {
 
     # Set up Production Environment
     blue "Setting up PostgreSQL Production Environment..."
-    install_postgresql $VM_PROD_ID
-    configure_postgresql $VM_PROD_ID $DB_NAME $DB_USER "$PROD_PASSWORD"
+#    install_postgresql $VM_PROD_ID
+#    configure_postgresql $VM_PROD_ID $DB_NAME $DB_USER "$PROD_PASSWORD"
     enable_external_connections $VM_PROD_ID "$NETWORK_CIDR"
     configure_backups_and_auth $VM_PROD_ID "$cloud_provider" "$cloud_command" "$bucket_path" "$credentials_file"
     create_snapshot $VM_PROD_ID "initial-setup"
