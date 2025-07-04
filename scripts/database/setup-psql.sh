@@ -81,11 +81,17 @@ install_cloud_cli() {
     local vm_id=$1
     local cloud_provider=$2
 
+    blue "Installing prerequisites in VM $vm_id..."
+    pct exec $vm_id -- bash -c "
+        apt update &&
+        apt install -y apt-transport-https ca-certificates gnupg curl
+    " || { red "Failed to install prerequisites on VM $vm_id"; exit 1; }
+    green "prerequisites installed in VM $vm_id."
+
     case $cloud_provider in
         aws)
             blue "Installing AWS CLI in VM $vm_id..."
             pct exec $vm_id -- bash -c "
-                apt update &&
                 apt install -y awscli
             " || { red "Failed to install AWS CLI on VM $vm_id"; exit 1; }
             green "AWS CLI installed in VM $vm_id."
@@ -93,16 +99,16 @@ install_cloud_cli() {
         gcp)
             blue "Installing Google Cloud SDK in VM $vm_id..."
             pct exec $vm_id -- bash -c "
+                echo \"deb [signed-by=/usr/share/keyrings/cloud.google.gpg] https://packages.cloud.google.com/apt cloud-sdk main\" | tee -a /etc/apt/sources.list.d/google-cloud-sdk.list &&
+                curl https://packages.cloud.google.com/apt/doc/apt-key.gpg | gpg --dearmor -o /usr/share/keyrings/cloud.google.gpg &&
                 apt update &&
-                apt install -y google-cloud-sdk
+                apt install -y google-cloud-cli
             " || { red "Failed to install Google Cloud SDK on VM $vm_id"; exit 1; }
             green "Google Cloud SDK installed in VM $vm_id."
             ;;
         azure)
             blue "Installing Azure CLI in VM $vm_id..."
             pct exec $vm_id -- bash -c "
-                apt update &&
-                apt install -y curl &&
                 curl -sL https://aka.ms/InstallAzureCLIDeb | bash
             " || { red "Failed to install Azure CLI on VM $vm_id"; exit 1; }
             green "Azure CLI installed in VM $vm_id."
@@ -262,8 +268,8 @@ main() {
 
     # Set up Test Environment
     blue "Setting up PostgreSQL Test Environment..."
-#    install_postgresql $VM_TEST_ID
-#    configure_postgresql $VM_TEST_ID "${DB_NAME}_test" "${DB_USER}_test" "$TEST_PASSWORD"
+    install_postgresql $VM_TEST_ID
+    configure_postgresql $VM_TEST_ID "${DB_NAME}_test" "${DB_USER}_test" "$TEST_PASSWORD"
     enable_external_connections $VM_TEST_ID "$NETWORK_CIDR"
     configure_backups_and_auth $VM_TEST_ID "$cloud_provider" "$cloud_command" "$bucket_path" "$credentials_file"
     create_snapshot $VM_TEST_ID "initial-setup"
@@ -271,8 +277,8 @@ main() {
 
     # Set up Production Environment
     blue "Setting up PostgreSQL Production Environment..."
-#    install_postgresql $VM_PROD_ID
-#    configure_postgresql $VM_PROD_ID $DB_NAME $DB_USER "$PROD_PASSWORD"
+    install_postgresql $VM_PROD_ID
+    configure_postgresql $VM_PROD_ID $DB_NAME $DB_USER "$PROD_PASSWORD"
     enable_external_connections $VM_PROD_ID "$NETWORK_CIDR"
     configure_backups_and_auth $VM_PROD_ID "$cloud_provider" "$cloud_command" "$bucket_path" "$credentials_file"
     create_snapshot $VM_PROD_ID "initial-setup"
